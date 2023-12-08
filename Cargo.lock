@@ -1064,6 +1064,7 @@ dependencies = [
  "hyper-util",
  "mio 0.8.9",
  "quiche",
+ "serde",
  "tokio 1.34.0",
  "tokio-core",
  "tokio-stream",

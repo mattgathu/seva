@@ -21,6 +21,8 @@ use hyper_util::{
     rt::{TokioExecutor, TokioIo},
     server::conn::auto::Builder as ServerBuilder,
 };
+use serde::Serialize;
+use std::collections::HashMap;
 use std::fmt;
 use std::future::Future;
 use std::marker::PhantomData;
@@ -129,26 +131,15 @@ impl DirServer {
     ) -> Result<Response<Full<Bytes>>> {
         // todo
         info!("serving request: {req:?} with context: {ctxt:?}");
-        let mut hb = Handlebars::new();
-        let template = Self::hb_template();
+        let hb = Handlebars::new();
+        let template = tokio::fs::read_to_string("index.html").await?;
 
-        let mut dir_entries = tokio::fs::read_dir(&*ctxt.dir).await?;
-        while let Some(item) = dir_entries.next_entry().await? {
-            info!("dir entry: {item:?}")
-        }
-        let bytes = tokio::fs::read("index.html").await?;
-        Ok(Response::new(Full::new(Bytes::from(bytes))))
-    }
+        let dir_entries = Self::build_dir_entries(&ctxt.dir).await?;
+        let mut data = HashMap::new();
+        data.insert("entries".to_string(), dir_entries);
+        let index = hb.render_template(&template, &data)?;
 
-    fn hb_template() -> String {
-        "
-        <tr>
-        {{icon}} 
-
-        {{name}}
-        </tr>
-        "
-        .to_string()
+        Ok(Response::new(Full::new(Bytes::from(index))))
     }
 
     fn build_server() -> ServerBuilder<TokioExecutor> {
@@ -161,7 +152,7 @@ impl DirServer {
         while let Some(item) = dir_entries.next_entry().await? {
             let meta = item.metadata().await?;
             let entry = DirEntry {
-                name: format!("{:?}", item.file_name()),
+                name: format!("{}", item.file_name().to_string_lossy()),
                 icon: "rust".to_string(),
                 file_type: EntryType::from(item.file_type().await?),
                 ext: item.path().extension().map(|s| format!("{s:?}")),
@@ -170,7 +161,6 @@ impl DirServer {
                 size: meta.len(),
             };
             entries.push(entry);
-            info!("dir entry: {item:?}")
         }
 
         Ok(entries)
@@ -217,6 +207,7 @@ impl<F, R> fmt::Debug for SevaSvc<F, R> {
     }
 }
 
+#[derive(Debug, Serialize)]
 struct DirEntry {
     name: String,
     icon: String,
@@ -227,6 +218,7 @@ struct DirEntry {
     size: u64,
 }
 
+#[derive(Debug, Serialize)]
 enum EntryType {
     File,
     Link,

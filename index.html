@@ -55,13 +55,18 @@
         <th>Created</th>
         <th>Modified</th>
       </tr>
+       {{#each entries as |e| }}
       <tr>
-          <th> <i class="devicon-{{icon}}-plain colored"></i> {{name}}</th>
-          <td>{{size}}</td>
-          <td>{{file_type}}</td>
-          <td>{{created}}</td>
-          <td>{{modified}}</td>
+          <th> 
+              <i class="devicon-{{e.icon}}-plain colored"></i> 
+              <a href="./{{name}}">{{name}}</a>
+          </th>
+          <td>{{e.size}}</td>
+          <td>{{e.file_type}}</td>
+          <td>{{e.created}}</td>
+          <td>{{e.modified}}</td>
       </tr>
+      {{/each}}
     </table>
 
 
