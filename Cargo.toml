@@ -23,3 +23,7 @@ tokio-core = "0.1.18"
 tokio-stream = { version = "0.1.14", features = ["full"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
+seva-macros = {path = "seva-macros"}
+
+[workspace]
+members = ["seva-macros"]

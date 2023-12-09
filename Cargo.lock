@@ -1065,11 +1065,21 @@ dependencies = [
  "mio 0.8.9",
  "quiche",
  "serde",
+ "seva-macros",
  "tokio 1.34.0",
  "tokio-core",
  "tokio-stream",
  "tracing",
  "tracing-subscriber",
+]
+
+[[package]]
+name = "seva-macros"
+version = "0.1.0"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
