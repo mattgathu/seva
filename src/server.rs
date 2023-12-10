@@ -1,13 +1,25 @@
 #![allow(unused)]
-use std::net::SocketAddr;
-
 use anyhow::Result;
+use bytes::Bytes;
+use bytes::{Buf, BufMut, BytesMut};
+use nom::bytes::complete::tag;
+use nom::bytes::complete::take_while1;
+use nom::character::is_alphabetic as is_alpha;
+use nom::sequence::preceded;
+use nom::sequence::Tuple;
+use nom::AsChar;
+use nom::IResult;
+use nom::Parser;
 use seva_macros::HttpStatusCode;
+use std::{fmt::Display, net::SocketAddr};
 use tokio::{
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
+
+const MAX_URI_LEN: usize = 65537;
 
 pub struct HttpServer {
     host: String,
@@ -73,9 +85,6 @@ impl HttpServer {
     fn send_header(&self, hdr: Header) -> Result<()> {
         todo!()
     }
-    fn send_error(&self, code: StatusCode, reason: &str) -> Result<()> {
-        todo!()
-    }
 }
 
 struct RequestHandler {
@@ -85,18 +94,106 @@ struct RequestHandler {
 impl RequestHandler {
     async fn handle(&mut self) -> Result<()> {
         //todo
+        match self._handle().await {
+            Ok(_) => {
+                info!("handled request");
+            }
+            Err(e) => {
+                error!("failed to handle request. reason: {e}");
+            }
+        }
         Ok(())
     }
-    fn parse_request(&self, req_str: &str) -> Result<Request> {
+
+    async fn _handle(&mut self) -> Result<()> {
+        let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
+        self.read_line(&mut buf, MAX_URI_LEN).await?;
+        if buf.len() == MAX_URI_LEN {
+            self.send_error(StatusCode::UriTooLong, "Request URI Too Long")
+                .await?;
+        } else {
+            let req = Self::parse_request(&buf)?;
+            info!("parsed request: {req:#?}");
+        }
+        Ok(())
+    }
+
+    //TODO: optimize
+    async fn read_line(&mut self, buf: &mut BytesMut, limit: usize) -> Result<()> {
+        let mut sz = 0usize;
+        loop {
+            if sz == limit {
+                break;
+            } else {
+                let b = self.stream.read_u8().await?;
+                if b as char == '\n' {
+                    break;
+                } else {
+                    buf.put_u8(b);
+                }
+                sz += 1;
+            }
+        }
+        Ok(())
+    }
+
+    fn parse_request(buf: &[u8]) -> Result<Request> {
+        let (
+            _i,
+            TempReq {
+                method,
+                version,
+                path,
+            },
+        ) = Self::parse_bytes(buf).map_err(|_| anyhow::format_err!("Request parsing failed."))?;
+
+        let method = HttpMethod::try_from(method)?;
+        let version = String::from_utf8(version.to_vec())?;
+        let path = String::from_utf8(path.to_vec())?;
+
+        Ok(Request {
+            method,
+            path,
+            version,
+            headers: vec![],
+        })
+    }
+
+    fn parse_bytes(i: &[u8]) -> IResult<&[u8], TempReq> {
+        let method = take_while1(is_alpha);
+        let space = take_while1(|c| c == b' ');
+        let space2 = take_while1(|c| c == b' ');
+        let path = take_while1(|c| c != b' ');
+        let is_version = |c: u8| c.is_ascii_digit() || c == b'.';
+        let http = tag("HTTP/");
+        let version = take_while1(is_version);
+        let line_ending = tag("\r");
+
+        let http_version = preceded(http, version);
+
+        let (input, (method, _, path, _, version, _)) =
+            (method, space, path, space2, http_version, line_ending).parse(i)?;
+
+        Ok((
+            input,
+            TempReq {
+                method,
+                version,
+                path,
+            },
+        ))
+    }
+
+    async fn send_error(&self, code: StatusCode, reason: &str) -> Result<()> {
         todo!()
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Request {
-    method: HttpMethod,
-    path: String,
-    headers: Vec<Header>,
-    protocol: String,
+pub struct Request {
+    pub method: HttpMethod,
+    pub path: String,
+    pub headers: Vec<Header>,
+    pub version: String,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Response {
@@ -115,7 +212,7 @@ struct Body {
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods
 #[derive(Debug, Clone, PartialEq, Eq)]
-enum HttpMethod {
+pub enum HttpMethod {
     /// The CONNECT method establishes a tunnel to the server identified by the target resource.
     Connect,
     /// The DELETE method deletes the specified resource.
@@ -135,6 +232,41 @@ enum HttpMethod {
     /// The TRACE method performs a message loop-back test along the path to the target resource.
     Trace,
 }
+#[derive(Debug, Clone)]
+pub enum HttpMethodParseError {
+    UnknownMethod(String),
+}
+impl Display for HttpMethodParseError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match &self {
+            HttpMethodParseError::UnknownMethod(val) => {
+                let s = format!("HttpMethodParseError::UnknownMethod({})", val);
+                f.write_str(&s)
+            }
+        }
+    }
+}
+
+impl std::error::Error for HttpMethodParseError {}
+impl TryFrom<&[u8]> for HttpMethod {
+    type Error = HttpMethodParseError;
+    fn try_from(value: &[u8]) -> std::prelude::v1::Result<Self, Self::Error> {
+        match value {
+            b"CONNECT" => Ok(HttpMethod::Connect),
+            b"DELETE" => Ok(HttpMethod::Delete),
+            b"GET" => Ok(HttpMethod::Get),
+            b"HEAD" => Ok(HttpMethod::Head),
+            b"OPTIONS" => Ok(HttpMethod::Options),
+            b"PATCH" => Ok(HttpMethod::Patch),
+            b"POST" => Ok(HttpMethod::Post),
+            b"PUT" => Ok(HttpMethod::Put),
+            b"TRACE" => Ok(HttpMethod::Trace),
+            _ => Err(HttpMethodParseError::UnknownMethod(
+                String::from_utf8(value.to_vec()).unwrap(),
+            )),
+        }
+    }
+}
 impl From<HttpMethod> for String {
     fn from(value: HttpMethod) -> Self {
         let s = match value {
@@ -152,9 +284,9 @@ impl From<HttpMethod> for String {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-struct Header {
-    name: String,
-    value: String,
+pub struct Header {
+    pub name: String,
+    pub value: String,
 }
 
 impl Header {
@@ -221,6 +353,9 @@ enum StatusCode {
     /// Request entity is larger than limits defined by server.
     #[code(413)]
     PayloadTooLarge,
+    /// The URI requested by the client is longer than the server is willing to interpret.
+    #[code(414)]
+    UriTooLong,
     /// This response is sent on an idle connection
     #[code(408)]
     RequestTimeout,
@@ -241,6 +376,11 @@ enum StatusCode {
     #[code(510)]
     NotExtended,
 }
+struct TempReq<'a> {
+    method: &'a [u8],
+    version: &'a [u8],
+    path: &'a [u8],
+}
 
 #[cfg(test)]
 mod tests {
@@ -249,9 +389,10 @@ mod tests {
     #[test]
     fn request_parsing() -> Result<()> {
         // Given
-        let _req_str = "GET / HTTP/1.1\nHost: developer.mozilla.org\nAccept-Language: fr";
+        let req_str = "GET / HTTP/1.1\nHost: developer.mozilla.org\nAccept-Language: fr";
         // When
-        let parsed: Request = todo!();
+        let buf = BytesMut::from(req_str);
+        let parsed: Request = RequestHandler::parse_request(&buf)?;
         // Then
         let expected = Request {
             method: HttpMethod::Get,
@@ -266,7 +407,7 @@ mod tests {
                     value: "developer.mozilla.org".to_string(),
                 },
             ],
-            protocol: "HTTP/1.1".to_string(),
+            version: "HTTP/1.1".to_string(),
         };
         assert_eq!(parsed, expected);
         Ok(())

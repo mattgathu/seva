@@ -5,10 +5,6 @@ use anyhow::{anyhow, Context, Error, Result};
 use bytes::Bytes;
 use clap::Parser;
 use handlebars::Handlebars;
-use hyper_util::{
-    rt::{TokioExecutor, TokioIo},
-    server::conn::auto::Builder as ServerBuilder,
-};
 use serde::Serialize;
 use std::fmt;
 use std::future::Future;
@@ -21,7 +17,6 @@ use std::time::SystemTime;
 use std::{env, path::PathBuf, time::Duration};
 use tokio::net::TcpListener;
 use tokio::net::TcpStream;
-use tokio_stream::StreamExt;
 use tracing::debug;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
