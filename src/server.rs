@@ -2,14 +2,9 @@
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
-use nom::bytes::complete::tag;
-use nom::bytes::complete::take_while1;
-use nom::character::is_alphabetic as is_alpha;
-use nom::sequence::preceded;
-use nom::sequence::Tuple;
-use nom::AsChar;
-use nom::IResult;
-use nom::Parser;
+use pest::iterators::{Pair, Pairs};
+use pest::Parser as PestParser;
+use pest_derive::Parser as PestDeriveParser;
 use seva_macros::HttpStatusCode;
 use std::{fmt::Display, net::SocketAddr};
 use tokio::{
@@ -21,6 +16,21 @@ use tracing::{debug, error, info, warn};
 
 const MAX_URI_LEN: usize = 65537;
 
+/// An HTTP "server" is a program that accepts connections in order to service HTTP requests by sending HTTP responses.
+///
+/// HTTP is a stateless request/response protocol for exchanging "messages" across a connection.
+///
+/// A client sends requests to a server in the form of a "request" message with a method and request target.
+/// The request might also contain header fields for request modifiers, client information,
+/// and representation metadata, content intended for processing in accordance with the method,
+/// and trailer fields to communicate information collected while sending the content.
+///
+/// A server responds to a client's request by sending one or more "response" messages,
+/// each including a status code. The response might also contain header fields for server information,
+/// resource metadata, and representation metadata, content to be interpreted in accordance with the
+/// status code, and trailer fields to communicate information collected while sending the content.
+///
+/// Ref: https://www.rfc-editor.org/rfc/rfc9110
 pub struct HttpServer {
     host: String,
     port: u16,
@@ -106,16 +116,28 @@ impl RequestHandler {
     }
 
     async fn _handle(&mut self) -> Result<()> {
-        let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
-        self.read_line(&mut buf, MAX_URI_LEN).await?;
-        if buf.len() == MAX_URI_LEN {
-            self.send_error(StatusCode::UriTooLong, "Request URI Too Long")
-                .await?;
-        } else {
-            let req = Self::parse_request(&buf)?;
-            info!("parsed request: {req:#?}");
-        }
+        let req = Request::parse(&self.read_request().await?)?;
+        info!("parsed request: {req:#?}");
         Ok(())
+    }
+    async fn read_request(&mut self) -> Result<String> {
+        let mut lines = vec![];
+        loop {
+            let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
+            self.read_line(&mut buf, MAX_URI_LEN).await?;
+            let s = String::from_utf8(buf.to_vec())?;
+            let len = s.len();
+            lines.push(s);
+            if len == 1 {
+                break;
+            }
+            println!("{lines:#?}");
+        }
+        let mut res = String::new();
+        for line in lines {
+            res.push_str(&format!("{}\n", line))
+        }
+        Ok(res)
     }
 
     //TODO: optimize
@@ -137,51 +159,8 @@ impl RequestHandler {
         Ok(())
     }
 
-    fn parse_request(buf: &[u8]) -> Result<Request> {
-        let (
-            _i,
-            TempReq {
-                method,
-                version,
-                path,
-            },
-        ) = Self::parse_bytes(buf).map_err(|_| anyhow::format_err!("Request parsing failed."))?;
-
-        let method = HttpMethod::try_from(method)?;
-        let version = String::from_utf8(version.to_vec())?;
-        let path = String::from_utf8(path.to_vec())?;
-
-        Ok(Request {
-            method,
-            path,
-            version,
-            headers: vec![],
-        })
-    }
-
-    fn parse_bytes(i: &[u8]) -> IResult<&[u8], TempReq> {
-        let method = take_while1(is_alpha);
-        let space = take_while1(|c| c == b' ');
-        let space2 = take_while1(|c| c == b' ');
-        let path = take_while1(|c| c != b' ');
-        let is_version = |c: u8| c.is_ascii_digit() || c == b'.';
-        let http = tag("HTTP/");
-        let version = take_while1(is_version);
-        let line_ending = tag("\r");
-
-        let http_version = preceded(http, version);
-
-        let (input, (method, _, path, _, version, _)) =
-            (method, space, path, space2, http_version, line_ending).parse(i)?;
-
-        Ok((
-            input,
-            TempReq {
-                method,
-                version,
-                path,
-            },
-        ))
+    fn parse_request(buf: &str) -> Result<Request> {
+        Request::parse(buf)
     }
 
     async fn send_error(&self, code: StatusCode, reason: &str) -> Result<()> {
@@ -194,6 +173,28 @@ pub struct Request {
     pub path: String,
     pub headers: Vec<Header>,
     pub version: String,
+}
+impl Request {
+    fn parse(req_str: &str) -> Result<Request> {
+        debug!("parsing: {req_str:#?}");
+        let mut res = HttpRequestParser::parse(Rule::request, req_str)?;
+        let req_rule = res.next().unwrap();
+        Request::try_from(req_rule)
+    }
+}
+impl<'i> TryFrom<Pair<'i, Rule>> for Request {
+    type Error = anyhow::Error;
+    fn try_from(pair: Pair<'i, Rule>) -> std::prelude::v1::Result<Self, Self::Error> {
+        let mut iterator = pair.into_inner();
+        let mut req = Self {
+            method: iterator.next().unwrap().try_into()?,
+            path: iterator.next().unwrap().as_str().to_string(),
+            version: iterator.next().unwrap().as_str().to_string(),
+            headers: vec![], // TODO
+        };
+
+        Ok(req)
+    }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Response {
@@ -247,6 +248,26 @@ impl Display for HttpMethodParseError {
     }
 }
 
+impl<'i> TryFrom<Pair<'i, Rule>> for HttpMethod {
+    type Error = HttpMethodParseError;
+    fn try_from(value: Pair<'i, Rule>) -> std::prelude::v1::Result<Self, Self::Error> {
+        match value.as_str() {
+            "CONNECT" => Ok(HttpMethod::Connect),
+            "DELETE" => Ok(HttpMethod::Delete),
+            "GET" => Ok(HttpMethod::Get),
+            "HEAD" => Ok(HttpMethod::Head),
+            "OPTIONS" => Ok(HttpMethod::Options),
+            "PATCH" => Ok(HttpMethod::Patch),
+            "POST" => Ok(HttpMethod::Post),
+            "PUT" => Ok(HttpMethod::Put),
+            "TRACE" => Ok(HttpMethod::Trace),
+            _ => Err(HttpMethodParseError::UnknownMethod(
+                value.as_str().to_string(),
+            )),
+        }
+    }
+}
+
 impl std::error::Error for HttpMethodParseError {}
 impl TryFrom<&[u8]> for HttpMethod {
     type Error = HttpMethodParseError;
@@ -262,7 +283,7 @@ impl TryFrom<&[u8]> for HttpMethod {
             b"PUT" => Ok(HttpMethod::Put),
             b"TRACE" => Ok(HttpMethod::Trace),
             _ => Err(HttpMethodParseError::UnknownMethod(
-                String::from_utf8(value.to_vec()).unwrap(),
+                String::from_utf8(value.to_vec()).unwrap_or_default(),
             )),
         }
     }
@@ -376,11 +397,23 @@ enum StatusCode {
     #[code(510)]
     NotExtended,
 }
-struct TempReq<'a> {
-    method: &'a [u8],
-    version: &'a [u8],
-    path: &'a [u8],
-}
+
+#[derive(PestDeriveParser)]
+#[grammar_inline = r#"
+request = { request_line ~ headers? ~ NEWLINE }
+
+request_line = _{ method ~ " "+ ~ uri ~ " "+ ~ "HTTP/" ~ version ~ NEWLINE }
+uri = { (!whitespace ~ ANY)+ }
+method = { ("CONNECT" | "DELETE" | "GET" | "HEAD" | "OPTIONS" | "PATCH" | "POST" | "PUT" | "TRACE") }
+version = { (ASCII_DIGIT | ".")+ }
+whitespace = _{ " " | "\t" }
+
+headers = { header+ }
+header = { header_name ~ ":" ~ whitespace ~ header_value ~ NEWLINE }
+header_name = { (!(NEWLINE | ":") ~ ANY)+ }
+header_value = { (!NEWLINE ~ ANY)+ }
+"#]
+struct HttpRequestParser;
 
 #[cfg(test)]
 mod tests {
@@ -389,10 +422,9 @@ mod tests {
     #[test]
     fn request_parsing() -> Result<()> {
         // Given
-        let req_str = "GET / HTTP/1.1\nHost: developer.mozilla.org\nAccept-Language: fr";
+        let req_str = "GET / HTTP/1.1\r\nHost: developer.mozilla.org\nAccept-Language: fr\r\n";
         // When
-        let buf = BytesMut::from(req_str);
-        let parsed: Request = RequestHandler::parse_request(&buf)?;
+        let parsed: Request = RequestHandler::parse_request(req_str)?;
         // Then
         let expected = Request {
             method: HttpMethod::Get,
