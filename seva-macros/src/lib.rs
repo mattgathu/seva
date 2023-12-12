@@ -55,12 +55,27 @@ fn derive(node: &DeriveInput) -> Result<TokenStream> {
             #ty::#variant => #code,
         }
     });
+    let status_msg_impls = input.variants.iter().map(|var| {
+        let variant = &var.ident;
+        let name = format!("{}", variant);
+        quote! {
+            #ty::#variant => #name,
+        }
+    });
     Ok(quote! {
         impl #impl_generics ::core::convert::From<#ty> for u16 #ty_generics #where_clause {
             fn from(value: #ty) -> u16 {
                 match value {
                     #(#status_code_impls)*
                 }
+            }
+        }
+        impl #impl_generics ::core::fmt::Display for #ty #ty_generics #where_clause {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let s = match &self {
+                     #(#status_msg_impls)*
+                };
+                write!(f, "{}", s)
             }
         }
     })

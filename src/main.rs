@@ -184,7 +184,7 @@ async fn main() -> Result<()> {
 
     //let mut server = DirServer::new(args.host, args.port, dir).await?;
     //server.run().await;
-    let mut server = server::HttpServer::new(args.host, args.port).await?;
+    let mut server = server::HttpServer::new(args.host, args.port, dir).await?;
     server.run().await?;
     Ok(())
 }

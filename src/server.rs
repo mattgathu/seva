@@ -2,12 +2,20 @@
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
+use handlebars::Handlebars;
 use pest::iterators::{Pair, Pairs};
 use pest::Parser as PestParser;
 use pest_derive::Parser as PestDeriveParser;
+use serde::Serialize;
 use seva_macros::HttpStatusCode;
+use std::collections::HashMap;
+use std::ffi::OsString;
+use std::path::PathBuf;
+use std::str::FromStr;
+use std::time::SystemTime;
 use std::{fmt::Display, net::SocketAddr};
 use tokio::{
+    fs::read_dir,
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
     net::{TcpListener, TcpStream},
     task::JoinHandle,
@@ -34,19 +42,21 @@ const MAX_URI_LEN: usize = 65537;
 pub struct HttpServer {
     host: String,
     port: u16,
+    dir: PathBuf,
     listener: TcpListener,
     shut_down: bool,
     handles: Vec<JoinHandle<Result<()>>>,
 }
 
 impl HttpServer {
-    pub async fn new(host: String, port: u16) -> Result<HttpServer> {
+    pub async fn new(host: String, port: u16, dir: PathBuf) -> Result<HttpServer> {
         let listener = TcpListener::bind((host.clone(), port)).await?;
         let shut_down = false;
         let handles = vec![];
         Ok(Self {
             host,
             port,
+            dir,
             listener,
             shut_down,
             handles,
@@ -65,10 +75,13 @@ impl HttpServer {
             match self.listener.accept().await {
                 Ok((stream, client_addr)) => {
                     // handle conn
+                    let dir = self.dir.clone();
                     let join = tokio::spawn(async move {
                         let mut handler = RequestHandler {
                             stream,
                             client_addr,
+                            dir,
+                            resp_headers: String::new(),
                         };
                         handler.handle().await
                     });
@@ -100,6 +113,8 @@ impl HttpServer {
 struct RequestHandler {
     stream: TcpStream,
     client_addr: SocketAddr,
+    dir: PathBuf,
+    resp_headers: String,
 }
 impl RequestHandler {
     async fn handle(&mut self) -> Result<()> {
@@ -115,9 +130,52 @@ impl RequestHandler {
         Ok(())
     }
 
+    async fn map_dir(&mut self) -> Result<HashMap<String, DirEntry>> {
+        let map = Self::build_dir_entries(&self.dir)
+            .await?
+            .into_iter()
+            .map(|e| (e.name.clone(), e))
+            .collect();
+
+        Ok(map)
+    }
+
     async fn _handle(&mut self) -> Result<()> {
         let req = Request::parse(&self.read_request().await?)?;
+        let dir_map = self.map_dir().await?;
+        let req_path = req.path.as_str();
+        if req_path == "/" || req_path == "/index.html" {
+            // return index
+            info!("serving index");
+            self.serve_index().await?;
+        } else if dir_map.contains_key(req_path) {
+            // process entry
+            todo!()
+        } else {
+            // return 404
+            todo!()
+        }
         info!("parsed request: {req:#?}");
+        Ok(())
+    }
+    async fn serve_index(&mut self) -> Result<()> {
+        let hb = Handlebars::new();
+        let template = tokio::fs::read_to_string("index.html").await?;
+
+        let dir_entries = Self::build_dir_entries(&self.dir).await?;
+        let mut data = HashMap::new();
+        data.insert("entries".to_string(), dir_entries);
+        let index = hb.render_template(&template, &data)?;
+
+        let resp = Response {
+            protocol: "HTTP/1.1".to_owned(),
+            status: StatusCode::Ok,
+            headers: vec![],
+            body: Some(Bytes::from(index)),
+        };
+
+        self.send_response(resp).await?;
+
         Ok(())
     }
     async fn read_request(&mut self) -> Result<String> {
@@ -158,6 +216,31 @@ impl RequestHandler {
         }
         Ok(())
     }
+    async fn send_response(&mut self, r: Response) -> Result<()> {
+        info!("response: {r:?}"); //TODO: log properly
+                                  // send response
+                                  // TODO: resp_hdrs should be in Response
+        self.resp_headers.push_str(&format!(
+            "{protocol} {status_code} {status_msg}\r\n",
+            protocol = r.protocol,
+            status_code = u16::from(r.status),
+            status_msg = r.status,
+        ));
+        self.resp_headers.push_str("Server: seva/0.1.0\r\n");
+        self.resp_headers.push_str("\r\n");
+        self.stream.write_all(self.resp_headers.as_bytes()).await?;
+        self.resp_headers.clear();
+        // send server header
+        // send date header
+        // write body
+        if let Some(bod) = r.body {
+            self.stream.write_all(&bod).await?;
+        }
+        // finish
+        self.stream.shutdown().await?;
+
+        Ok(())
+    }
 
     fn parse_request(buf: &str) -> Result<Request> {
         Request::parse(buf)
@@ -166,6 +249,58 @@ impl RequestHandler {
     async fn send_error(&self, code: StatusCode, reason: &str) -> Result<()> {
         todo!()
     }
+    async fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
+        let mut entries = vec![];
+        let mut dir_entries = tokio::fs::read_dir(dir).await?;
+        while let Some(item) = dir_entries.next_entry().await? {
+            let meta = item.metadata().await?;
+            let entry = DirEntry {
+                name: format!("{}", item.file_name().to_string_lossy()),
+                icon: "rust".to_string(),
+                file_type: EntryType::from(item.file_type().await?),
+                ext: item.path().extension().map(|s| format!("{s:?}")),
+                modified: meta.modified()?,
+                created: meta.created()?,
+                size: meta.len(),
+            };
+            entries.push(entry);
+        }
+
+        Ok(entries)
+    }
+}
+#[derive(Debug, Serialize)]
+struct DirEntry {
+    name: String,
+    icon: String,
+    file_type: EntryType,
+    ext: Option<String>,
+    modified: SystemTime,
+    created: SystemTime,
+    size: u64,
+}
+
+#[derive(Debug, Serialize)]
+enum EntryType {
+    File,
+    Link,
+    Dir,
+    Other,
+}
+impl From<std::fs::FileType> for EntryType {
+    fn from(value: std::fs::FileType) -> Self {
+        if value.is_dir() {
+            Self::Dir
+        } else if value.is_file() {
+            Self::File
+        } else if value.is_symlink() {
+            Self::Link
+        } else {
+            Self::Other
+        }
+    }
+    //
+    //
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -199,10 +334,9 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request {
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Response {
     protocol: String,
-    status: u16,
-    status_msg: StatusCode,
+    status: StatusCode,
     headers: Vec<Header>,
-    body: Option<Body>,
+    body: Option<Bytes>,
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct Body {
@@ -334,7 +468,7 @@ impl From<HeaderName> for String {
 /// HTTP response status codes indicate whether a specific HTTP request has been successfully completed
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
-#[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq)]
+#[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq, Copy)]
 enum StatusCode {
     // Informational
     /// This code is sent in response to an Upgrade request header from the client and
