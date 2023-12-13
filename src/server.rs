@@ -2,6 +2,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
+use chrono::{DateTime, Local};
 use handlebars::Handlebars;
 use pest::iterators::{Pair, Pairs};
 use pest::Parser as PestParser;
@@ -10,10 +11,14 @@ use serde::Serialize;
 use seva_macros::HttpStatusCode;
 use std::collections::HashMap;
 use std::ffi::OsString;
+use std::fmt::format;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
 use std::{fmt::Display, net::SocketAddr};
+use tokio::io::BufReader;
+use tokio::io::BufWriter;
+use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::{
     fs::read_dir,
     io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
@@ -77,12 +82,7 @@ impl HttpServer {
                     // handle conn
                     let dir = self.dir.clone();
                     let join = tokio::spawn(async move {
-                        let mut handler = RequestHandler {
-                            stream,
-                            client_addr,
-                            dir,
-                            resp_headers: String::new(),
-                        };
+                        let mut handler = RequestHandler::new(stream, client_addr, dir);
                         handler.handle().await
                     });
                     self.handles.push(join);
@@ -105,23 +105,36 @@ impl HttpServer {
     fn handle_timeout(&mut self) -> Result<()> {
         todo!()
     }
-    fn send_header(&self, hdr: Header) -> Result<()> {
-        todo!()
-    }
 }
 
 struct RequestHandler {
-    stream: TcpStream,
+    reader: BufReader<OwnedReadHalf>,
+    writer: BufWriter<OwnedWriteHalf>,
     client_addr: SocketAddr,
     dir: PathBuf,
-    resp_headers: String,
+    //TODO: find better place
+    protocol: String,
 }
 impl RequestHandler {
+    fn new(stream: TcpStream, client_addr: SocketAddr, dir: PathBuf) -> RequestHandler {
+        let (rdr, wrt) = stream.into_split();
+        let reader = BufReader::new(rdr);
+        let writer = BufWriter::new(wrt);
+        let protocol = "HTTP/1.1".to_owned();
+
+        RequestHandler {
+            reader,
+            writer,
+            client_addr,
+            dir,
+            protocol,
+        }
+    }
     async fn handle(&mut self) -> Result<()> {
         //todo
         match self._handle().await {
             Ok(_) => {
-                info!("handled request");
+                // TODO
             }
             Err(e) => {
                 error!("failed to handle request. reason: {e}");
@@ -145,20 +158,23 @@ impl RequestHandler {
         let dir_map = self.map_dir().await?;
         let req_path = req.path.as_str();
         if req_path == "/" || req_path == "/index.html" {
-            // return index
-            info!("serving index");
-            self.serve_index().await?;
+            self.serve_index(&req).await?;
         } else if dir_map.contains_key(req_path) {
             // process entry
             todo!()
         } else {
             // return 404
-            todo!()
+            let resp = Response {
+                protocol: self.protocol.clone(),
+                status: StatusCode::NotFound,
+                headers: vec![],
+                body: None,
+            };
+            self.send_response(resp, &req).await?;
         }
-        info!("parsed request: {req:#?}");
         Ok(())
     }
-    async fn serve_index(&mut self) -> Result<()> {
+    async fn serve_index(&mut self, req: &Request) -> Result<()> {
         let hb = Handlebars::new();
         let template = tokio::fs::read_to_string("index.html").await?;
 
@@ -166,15 +182,20 @@ impl RequestHandler {
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
         let index = hb.render_template(&template, &data)?;
-
-        let resp = Response {
-            protocol: "HTTP/1.1".to_owned(),
-            status: StatusCode::Ok,
-            headers: vec![],
-            body: Some(Bytes::from(index)),
+        let body = if req.method == HttpMethod::Head {
+            None
+        } else {
+            Some(Bytes::from(index))
         };
 
-        self.send_response(resp).await?;
+        let resp = Response {
+            protocol: self.protocol.clone(),
+            status: StatusCode::Ok,
+            headers: vec![],
+            body,
+        };
+
+        self.send_response(resp, req).await?;
 
         Ok(())
     }
@@ -189,7 +210,6 @@ impl RequestHandler {
             if len == 1 {
                 break;
             }
-            println!("{lines:#?}");
         }
         let mut res = String::new();
         for line in lines {
@@ -205,7 +225,7 @@ impl RequestHandler {
             if sz == limit {
                 break;
             } else {
-                let b = self.stream.read_u8().await?;
+                let b = self.reader.read_u8().await?;
                 if b as char == '\n' {
                     break;
                 } else {
@@ -216,38 +236,83 @@ impl RequestHandler {
         }
         Ok(())
     }
-    async fn send_response(&mut self, r: Response) -> Result<()> {
-        info!("response: {r:?}"); //TODO: log properly
-                                  // send response
-                                  // TODO: resp_hdrs should be in Response
-        self.resp_headers.push_str(&format!(
-            "{protocol} {status_code} {status_msg}\r\n",
-            protocol = r.protocol,
-            status_code = u16::from(r.status),
-            status_msg = r.status,
-        ));
-        self.resp_headers.push_str("Server: seva/0.1.0\r\n");
-        self.resp_headers.push_str("\r\n");
-        self.stream.write_all(self.resp_headers.as_bytes()).await?;
-        self.resp_headers.clear();
-        // send server header
-        // send date header
-        // write body
-        if let Some(bod) = r.body {
-            self.stream.write_all(&bod).await?;
-        }
-        // finish
-        self.stream.shutdown().await?;
+    async fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
+        self.send_resp_line(r.status).await?;
+        self.send_header(&Header::new("Server", "seva/0.1.0"))
+            .await?;
+        self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
+            .await?;
+        self.end_headers().await?;
+        let bytes_sent = if let Some(body) = r.body {
+            self.send_body(body).await?
+        } else {
+            0
+        };
+        self.writer.shutdown().await?;
+        self.log_response(req, r.status, bytes_sent);
 
         Ok(())
+    }
+
+    async fn send_body(&mut self, mut body: impl Buf) -> Result<usize> {
+        let mut sz = 0;
+        while body.has_remaining() {
+            self.writer.write_u8(body.get_u8()).await?;
+            sz += 1;
+        }
+        Ok(sz)
+    }
+
+    async fn send_header(&mut self, hdr: &Header) -> Result<()> {
+        let h = format!("{}: {}\r\n", hdr.name, hdr.value);
+        self.writer.write_all(h.as_bytes()).await?;
+        Ok(())
+    }
+    async fn end_headers(&mut self) -> Result<()> {
+        self.writer.write_all(b"\r\n").await?;
+        Ok(())
+    }
+    /// Log the request using the common log format
+    ///
+    /// [Log formats for HTTP Server](https://www.ibm.com/docs/en/i/7.5?topic=logging-log-formats)
+    fn log_response(&self, req: &Request, status: StatusCode, bytes: usize) {
+        let req_line = format!(
+            "{method} {path} HTTP/{version}",
+            method = req.method,
+            path = req.path,
+            version = req.version
+        );
+        info!(
+            "{client_addr} - - [{time}] \"{req_line}\" {status_code} {bytes}",
+            client_addr = self.client_addr,
+            time = req.time.format("%d/%b/%Y:%H:%M:%S %z"),
+            req_line = req_line,
+            status_code = u16::from(status),
+            bytes = bytes
+        )
     }
 
     fn parse_request(buf: &str) -> Result<Request> {
         Request::parse(buf)
     }
 
-    async fn send_error(&self, code: StatusCode, reason: &str) -> Result<()> {
-        todo!()
+    async fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
+        let resp_line = format!(
+            "{protocol} {status_code} {status_msg}\r\n",
+            protocol = self.protocol,
+            status_code = u16::from(status),
+            status_msg = status,
+        )
+        .into_bytes();
+        self.writer.write_all(&resp_line).await?;
+        Ok(())
+    }
+
+    async fn send_error(&mut self, code: StatusCode, reason: &str) -> Result<()> {
+        error!("{code} - {reason}");
+        self.send_resp_line(code).await?;
+        self.writer.shutdown().await?;
+        Ok(())
     }
     async fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
         let mut entries = vec![];
@@ -308,10 +373,10 @@ pub struct Request {
     pub path: String,
     pub headers: Vec<Header>,
     pub version: String,
+    pub time: DateTime<Local>,
 }
 impl Request {
     fn parse(req_str: &str) -> Result<Request> {
-        debug!("parsing: {req_str:#?}");
         let mut res = HttpRequestParser::parse(Rule::request, req_str)?;
         let req_rule = res.next().unwrap();
         Request::try_from(req_rule)
@@ -326,6 +391,7 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request {
             path: iterator.next().unwrap().as_str().to_string(),
             version: iterator.next().unwrap().as_str().to_string(),
             headers: vec![], // TODO
+            time: Local::now(),
         };
 
         Ok(req)
@@ -346,7 +412,7 @@ struct Body {
 /// HTTP defines a set of request methods to indicate the desired action to be performed for a given resource.
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum HttpMethod {
     /// The CONNECT method establishes a tunnel to the server identified by the target resource.
     Connect,
@@ -438,6 +504,12 @@ impl From<HttpMethod> for String {
         s.to_uppercase().to_string()
     }
 }
+
+impl Display for HttpMethod {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&String::from(*self))
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Header {
     pub name: String,
@@ -445,10 +517,10 @@ pub struct Header {
 }
 
 impl Header {
-    fn new(name: impl Into<String>, value: String) -> Self {
+    fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
         Self {
             name: name.into(),
-            value,
+            value: value.into(),
         }
     }
 }
@@ -574,6 +646,7 @@ mod tests {
                 },
             ],
             version: "HTTP/1.1".to_string(),
+            time: Local::now(),
         };
         assert_eq!(parsed, expected);
         Ok(())

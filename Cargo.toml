@@ -17,6 +17,7 @@ tracing-subscriber = "0.3.18"
 seva-macros = {path = "seva-macros"}
 pest = "2.7.5"
 pest_derive = "2.7.5"
+chrono = "0.4.31"
 
 [workspace]
 members = ["seva-macros"]
