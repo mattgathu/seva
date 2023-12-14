@@ -242,6 +242,8 @@ impl RequestHandler {
             .await?;
         self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
             .await?;
+        self.send_header(&Header::new("Connection", "close"))
+            .await?;
         self.end_headers().await?;
         let bytes_sent = if let Some(body) = r.body {
             self.send_body(body).await?
@@ -292,10 +294,6 @@ impl RequestHandler {
         )
     }
 
-    fn parse_request(buf: &str) -> Result<Request> {
-        Request::parse(buf)
-    }
-
     async fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
         let resp_line = format!(
             "{protocol} {status_code} {status_msg}\r\n",
@@ -314,6 +312,7 @@ impl RequestHandler {
         self.writer.shutdown().await?;
         Ok(())
     }
+
     async fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
         let mut entries = vec![];
         let mut dir_entries = tokio::fs::read_dir(dir).await?;
@@ -381,6 +380,19 @@ impl Request {
         let req_rule = res.next().unwrap();
         Request::try_from(req_rule)
     }
+    fn parse_headers(pair: Pair<Rule>) -> Result<Vec<Header>> {
+        let mut headers = vec![];
+        for hdr in pair.into_inner() {
+            let mut hdr = hdr.into_inner();
+            let name = hdr.next().unwrap().as_str().to_string();
+            let value = hdr.next().unwrap().as_str().to_string();
+            headers.push(Header::new(name, value))
+        }
+        //TODO: remove clone
+        headers.sort_by_key(|hdr| hdr.name.clone());
+
+        Ok(headers)
+    }
 }
 impl<'i> TryFrom<Pair<'i, Rule>> for Request {
     type Error = anyhow::Error;
@@ -390,7 +402,7 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request {
             method: iterator.next().unwrap().try_into()?,
             path: iterator.next().unwrap().as_str().to_string(),
             version: iterator.next().unwrap().as_str().to_string(),
-            headers: vec![], // TODO
+            headers: Request::parse_headers(iterator.next().unwrap())?, // TODO
             time: Local::now(),
         };
 
@@ -628,9 +640,10 @@ mod tests {
     #[test]
     fn request_parsing() -> Result<()> {
         // Given
-        let req_str = "GET / HTTP/1.1\r\nHost: developer.mozilla.org\nAccept-Language: fr\r\n";
+        let req_str =
+            "GET / HTTP/1.1\r\nHost: developer.mozilla.org\r\nAccept-Language: fr\r\n\r\n";
         // When
-        let parsed: Request = RequestHandler::parse_request(req_str)?;
+        let parsed: Request = Request::parse(req_str)?;
         // Then
         let expected = Request {
             method: HttpMethod::Get,
@@ -645,10 +658,13 @@ mod tests {
                     value: "developer.mozilla.org".to_string(),
                 },
             ],
-            version: "HTTP/1.1".to_string(),
+            version: "1.1".to_string(),
             time: Local::now(),
         };
-        assert_eq!(parsed, expected);
+        assert_eq!(parsed.method, expected.method);
+        assert_eq!(parsed.path, expected.path);
+        assert_eq!(parsed.version, expected.version);
+        assert_eq!(parsed.headers, expected.headers);
         Ok(())
     }
 }
