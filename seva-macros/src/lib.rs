@@ -1,7 +1,7 @@
 extern crate proc_macro;
 
 use proc_macro2::Literal;
-use proc_macro2::Span;
+
 use proc_macro2::TokenStream;
 use proc_macro2::TokenTree;
 use quote::quote;
@@ -17,7 +17,13 @@ pub fn http_status_code_derive(input: proc_macro::TokenStream) -> proc_macro::To
         .unwrap_or_else(|err| err.to_compile_error())
         .into()
 }
-
+#[proc_macro_derive(MimeType, attributes(mime_type, mime_ext))]
+pub fn mime_type_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+    let input = parse_macro_input!(input as DeriveInput);
+    derive_mime_type(&input)
+        .unwrap_or_else(|err| err.to_compile_error())
+        .into()
+}
 fn from_syn(node: &DeriveInput) -> Result<Enum> {
     match &node.data {
         Data::Enum(data) => Enum::from_syn(node, data),
@@ -27,34 +33,99 @@ fn from_syn(node: &DeriveInput) -> Result<Enum> {
         )),
     }
 }
+fn derive_mime_type(node: &DeriveInput) -> Result<TokenStream> {
+    let input = from_syn(node)?;
+
+    let ty = &input.ident;
+    let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
+
+    let mime_impls = input
+        .variants
+        .iter()
+        .filter(|v| v.mime_type.is_some())
+        .map(|variant| {
+            let mime_type: String = match &variant.mime_type.unwrap().meta {
+                Meta::List(ml) => {
+                    let mut mt = String::new();
+                    let tok = ml
+                        .tokens
+                        .clone()
+                        .into_iter()
+                        .next()
+                        .expect("missing mime type tokens");
+                    match tok {
+                        TokenTree::Ident(id) => mt.push_str(&format!("{}", id)),
+                        TokenTree::Literal(lit) => mt.push_str(&format!("{}", lit)),
+                        TokenTree::Punct(p) => mt.push_str(&format!("{}", p)),
+                        TokenTree::Group(g) => {
+                            for t in g.stream() {
+                                match t {
+                                    TokenTree::Ident(id) => mt.push_str(&format!("{}", id)),
+                                    TokenTree::Literal(lit) => mt.push_str(&format!("{}", lit)),
+                                    TokenTree::Punct(p) => mt.push_str(&format!("{}", p)),
+                                    _ => unreachable!(),
+                                }
+                            }
+                        }
+                    }
+
+                    if mt.is_empty() {
+                        panic!("Got empty mime type");
+                    }
+                    mt
+                }
+                _ => unreachable!(),
+            };
+            let variant = &variant.ident;
+
+            quote! {
+                #ty::#variant => #mime_type,
+            }
+        });
+
+    Ok(quote! {
+        impl #impl_generics ::core::fmt::Display for #ty #ty_generics #where_clause {
+            fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                let s = match &self {
+                     #(#mime_impls)*
+                };
+                write!(f, "{}", s)
+            }
+        }
+    })
+}
 fn derive(node: &DeriveInput) -> Result<TokenStream> {
     let input = from_syn(node)?;
 
     let ty = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let status_code_impls = input.variants.iter().map(|variant| {
-        let code: Literal = match &variant.code.meta {
-            Meta::List(ml) => {
-                let tok = ml
-                    .tokens
-                    .clone()
-                    .into_iter()
-                    .next()
-                    .expect("missing status code number");
-                match tok {
-                    TokenTree::Literal(lit) => lit,
-                    _ => unreachable!(),
+    let status_code_impls = input
+        .variants
+        .iter()
+        .filter(|v| v.code.is_some())
+        .map(|variant| {
+            let code: Literal = match &variant.code.unwrap().meta {
+                Meta::List(ml) => {
+                    let tok = ml
+                        .tokens
+                        .clone()
+                        .into_iter()
+                        .next()
+                        .expect("missing status code number");
+                    match tok {
+                        TokenTree::Literal(lit) => lit,
+                        _ => unreachable!(),
+                    }
                 }
-            }
-            _ => unreachable!(),
-        };
-        let variant = &variant.ident;
+                _ => unreachable!(),
+            };
+            let variant = &variant.ident;
 
-        quote! {
-            #ty::#variant => #code,
-        }
-    });
+            quote! {
+                #ty::#variant => #code,
+            }
+        });
     let status_msg_impls = input.variants.iter().map(|var| {
         let variant = &var.ident;
         let name = format!("{}", variant);
@@ -88,12 +159,11 @@ struct Enum<'a> {
 
 impl<'a> Enum<'a> {
     fn from_syn(node: &'a DeriveInput, data: &'a DataEnum) -> Result<Self> {
-        let span = Span::call_site();
         let variants = data
             .variants
             .iter()
             .map(|node| {
-                let variant = Variant::from_syn(node, span)?;
+                let variant = Variant::from_syn(node)?;
 
                 Ok(variant)
             })
@@ -107,24 +177,31 @@ impl<'a> Enum<'a> {
 }
 
 struct Variant<'a> {
-    code: &'a Attribute,
+    code: Option<&'a Attribute>,
+    mime_type: Option<&'a Attribute>,
+    mime_ext: Option<&'a Attribute>,
     ident: Ident,
 }
 
 impl<'a> Variant<'a> {
-    fn from_syn(node: &'a syn::Variant, span: Span) -> Result<Self> {
+    fn from_syn(node: &'a syn::Variant) -> Result<Self> {
         Ok(Variant {
-            code: get_code_attr(&node.attrs, span)?,
+            code: get_code_attr(&node.attrs),
+            mime_type: get_mime_type_attr(&node.attrs),
+            mime_ext: get_mime_ext_attr(&node.attrs),
             ident: node.ident.clone(),
         })
     }
 }
 
-fn get_code_attr(input: &[Attribute], span: Span) -> Result<&Attribute> {
-    for attr in input {
-        if attr.path().is_ident("code") {
-            return Ok(attr);
-        }
-    }
-    Err(Error::new(span, "missing code attribute!"))
+fn get_code_attr(input: &[Attribute]) -> Option<&Attribute> {
+    input.iter().find(|&attr| attr.path().is_ident("code"))
+}
+
+fn get_mime_type_attr(input: &[Attribute]) -> Option<&Attribute> {
+    input.iter().find(|&attr| attr.path().is_ident("mime_type"))
+}
+
+fn get_mime_ext_attr(input: &[Attribute]) -> Option<&Attribute> {
+    input.iter().find(|&attr| attr.path().is_ident("mime_ext"))
 }

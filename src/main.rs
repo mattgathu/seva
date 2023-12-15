@@ -21,6 +21,8 @@ use tracing::debug;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+mod fs;
+mod http;
 mod server;
 
 /// A directory http server.
@@ -103,60 +105,6 @@ impl DirServer {
         info!("handling stream from: {peer_addr} {socket:?} {ctxt:?}");
         Ok(())
     }
-
-    async fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
-        let mut entries = vec![];
-        let mut dir_entries = tokio::fs::read_dir(dir).await?;
-        while let Some(item) = dir_entries.next_entry().await? {
-            let meta = item.metadata().await?;
-            let entry = DirEntry {
-                name: format!("{}", item.file_name().to_string_lossy()),
-                icon: "rust".to_string(),
-                file_type: EntryType::from(item.file_type().await?),
-                ext: item.path().extension().map(|s| format!("{s:?}")),
-                modified: meta.modified()?,
-                created: meta.created()?,
-                size: meta.len(),
-            };
-            entries.push(entry);
-        }
-
-        Ok(entries)
-    }
-}
-
-#[derive(Debug, Serialize)]
-struct DirEntry {
-    name: String,
-    icon: String,
-    file_type: EntryType,
-    ext: Option<String>,
-    modified: SystemTime,
-    created: SystemTime,
-    size: u64,
-}
-
-#[derive(Debug, Serialize)]
-enum EntryType {
-    File,
-    Link,
-    Dir,
-    Other,
-}
-impl From<std::fs::FileType> for EntryType {
-    fn from(value: std::fs::FileType) -> Self {
-        if value.is_dir() {
-            Self::Dir
-        } else if value.is_file() {
-            Self::File
-        } else if value.is_symlink() {
-            Self::Link
-        } else {
-            Self::Other
-        }
-    }
-    //
-    //
 }
 
 #[tokio::main(flavor = "current_thread")]

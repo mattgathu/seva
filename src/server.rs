@@ -2,7 +2,7 @@
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, Utc};
 use handlebars::Handlebars;
 use pest::iterators::{Pair, Pairs};
 use pest::Parser as PestParser;
@@ -12,6 +12,9 @@ use seva_macros::HttpStatusCode;
 use std::collections::HashMap;
 use std::ffi::OsString;
 use std::fmt::format;
+use std::fs::Metadata;
+use std::io::ErrorKind;
+use std::path::Path;
 use std::path::PathBuf;
 use std::str::FromStr;
 use std::time::SystemTime;
@@ -156,12 +159,24 @@ impl RequestHandler {
     async fn _handle(&mut self) -> Result<()> {
         let req = Request::parse(&self.read_request().await?)?;
         let dir_map = self.map_dir().await?;
-        let req_path = req.path.as_str();
-        if req_path == "/" || req_path == "/index.html" {
-            self.serve_index(&req).await?;
-        } else if dir_map.contains_key(req_path) {
+        let req_path = Self::parse_req_path(&req.path).await?;
+        if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
+            self.serve_dir(&req, &self.dir.clone()).await?;
+        } else if let Some(entry) = self.lookup_path(&req_path).await? {
             // process entry
-            todo!()
+            match entry.file_type {
+                EntryType::File => self.send_file(&req, &entry).await?,
+                EntryType::Link => {
+                    //TODO
+                }
+                EntryType::Dir => {
+                    self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)
+                        .await?
+                }
+                EntryType::Other => {
+                    //TODO
+                }
+            }
         } else {
             // return 404
             let resp = Response {
@@ -174,11 +189,11 @@ impl RequestHandler {
         }
         Ok(())
     }
-    async fn serve_index(&mut self, req: &Request) -> Result<()> {
+    async fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
         let hb = Handlebars::new();
         let template = tokio::fs::read_to_string("index.html").await?;
 
-        let dir_entries = Self::build_dir_entries(&self.dir).await?;
+        let dir_entries = Self::build_dir_entries(path).await?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
         let index = hb.render_template(&template, &data)?;
@@ -198,6 +213,52 @@ impl RequestHandler {
         self.send_response(resp, req).await?;
 
         Ok(())
+    }
+    async fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
+        //TODO: implement mime type guesser
+        let mime_type = self.get_mime_type(&entry.name)?;
+        let mut file = tokio::fs::File::open(&entry.name).await?;
+        self.send_resp_line(StatusCode::Ok).await?;
+        self.send_header(&Header::new("Server", "seva/0.1.0"))
+            .await?;
+        self.send_header(&Header::new("Content-Type", mime_type))
+            .await?;
+        self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
+            .await?;
+        self.send_header(&Header::new("Last-Modified", entry.modified.to_rfc2822()))
+            .await?;
+        self.send_header(&Header::new("Content-Length", format!("{}", entry.size)))
+            .await?;
+        self.send_header(&Header::new("Connection", "close"))
+            .await?;
+        self.end_headers().await?;
+
+        if req.method != HttpMethod::Head {
+            tokio::io::copy(&mut file, &mut self.writer).await?;
+        }
+        self.writer.shutdown().await?;
+
+        self.log_response(req, StatusCode::Ok, entry.size as usize);
+        Ok(())
+    }
+
+    fn get_mime_type(&self, path: &str) -> Result<String> {
+        let default = "application/octet-stream".to_string();
+        Ok(default)
+    }
+
+    async fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
+        let fpath = self.dir.join(path);
+        match tokio::fs::metadata(fpath).await {
+            Ok(meta) => Ok(Some(DirEntry::from_metadata(meta, path)?)),
+            Err(e) => {
+                if e.kind() == ErrorKind::NotFound {
+                    Ok(None)
+                } else {
+                    Err(anyhow::anyhow!(e))
+                }
+            }
+        }
     }
     async fn read_request(&mut self) -> Result<String> {
         let mut lines = vec![];
@@ -318,30 +379,55 @@ impl RequestHandler {
         let mut dir_entries = tokio::fs::read_dir(dir).await?;
         while let Some(item) = dir_entries.next_entry().await? {
             let meta = item.metadata().await?;
-            let entry = DirEntry {
-                name: format!("{}", item.file_name().to_string_lossy()),
-                icon: "rust".to_string(),
-                file_type: EntryType::from(item.file_type().await?),
-                ext: item.path().extension().map(|s| format!("{s:?}")),
-                modified: meta.modified()?,
-                created: meta.created()?,
-                size: meta.len(),
-            };
+            let name = format!("{}", item.file_name().to_string_lossy());
+            let entry = DirEntry::from_metadata(meta, &name)?;
             entries.push(entry);
         }
-
         Ok(entries)
     }
+    // TODO return ref instead of owned PathBuf
+    async fn parse_req_path(req_path: &str) -> Result<String> {
+        let mut req_path = req_path;
+        if let Some((l, _)) = req_path.split_once('?') {
+            req_path = l;
+        }
+        if let Some((l, _)) = req_path.split_once('#') {
+            req_path = l;
+        }
+        let path: String = req_path.split('/').filter(|p| !p.is_empty()).collect();
+
+        Ok(path)
+    }
 }
+//TODO: move all file sys stuff to new fs module
 #[derive(Debug, Serialize)]
 struct DirEntry {
     name: String,
-    icon: String,
     file_type: EntryType,
     ext: Option<String>,
-    modified: SystemTime,
-    created: SystemTime,
+    modified: DateTime<Utc>,
+    created: DateTime<Utc>,
     size: u64,
+}
+impl DirEntry {
+    fn dt(t: SystemTime) -> Result<DateTime<Utc>> {
+        let secs = t.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+        let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0);
+        match dt {
+            Some(dt) => Ok(dt),
+            None => Err(anyhow::format_err!("date conversion failed")),
+        }
+    }
+    fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {
+        Ok(Self {
+            name: name.to_string(),
+            file_type: EntryType::from(meta.file_type()),
+            ext: None,
+            modified: Self::dt(meta.modified()?)?,
+            created: Self::dt(meta.created()?)?,
+            size: meta.len(),
+        })
+    }
 }
 
 #[derive(Debug, Serialize)]
@@ -368,6 +454,7 @@ impl From<std::fs::FileType> for EntryType {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
+    //TODO: use &str instead of String
     pub method: HttpMethod,
     pub path: String,
     pub headers: Vec<Header>,
@@ -421,6 +508,7 @@ struct Body {
     // todo
 }
 
+// TODO: move all http stuff to http module
 /// HTTP defines a set of request methods to indicate the desired action to be performed for a given resource.
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods
