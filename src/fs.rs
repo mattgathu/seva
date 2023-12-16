@@ -1,4 +1,62 @@
+use anyhow::Result;
+use chrono::{DateTime, Utc};
+use serde::Serialize;
 use seva_macros::MimeType;
+use std::fs::Metadata;
+use std::time::SystemTime;
+
+#[derive(Debug, Serialize)]
+pub struct DirEntry {
+    pub name: String,
+    pub file_type: EntryType,
+    pub ext: Option<String>,
+    pub modified: DateTime<Utc>,
+    pub created: DateTime<Utc>,
+    pub size: u64,
+}
+impl DirEntry {
+    pub fn dt(t: SystemTime) -> Result<DateTime<Utc>> {
+        let secs = t.duration_since(SystemTime::UNIX_EPOCH)?.as_secs();
+        let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0);
+        match dt {
+            Some(dt) => Ok(dt),
+            None => Err(anyhow::format_err!("date conversion failed")),
+        }
+    }
+    pub fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {
+        Ok(Self {
+            name: name.to_string(),
+            file_type: EntryType::from(meta.file_type()),
+            ext: None,
+            modified: Self::dt(meta.modified()?)?,
+            created: Self::dt(meta.created()?)?,
+            size: meta.len(),
+        })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub enum EntryType {
+    File,
+    Link,
+    Dir,
+    Other,
+}
+impl From<std::fs::FileType> for EntryType {
+    fn from(value: std::fs::FileType) -> Self {
+        if value.is_dir() {
+            Self::Dir
+        } else if value.is_file() {
+            Self::File
+        } else if value.is_symlink() {
+            Self::Link
+        } else {
+            Self::Other
+        }
+    }
+    //
+    //
+}
 
 #[derive(MimeType)]
 pub enum MimeTypes {
@@ -128,7 +186,7 @@ pub enum MimeTypes {
     Mid,
     ///Musical Instrument Digital Interface (MIDI)
     #[mime_type(#[mime_type(audio/midi,)])]
-    #[mime_ext( .midi)]
+    #[mime_ext(.midi)]
     Midi,
     ///JavaScript module
     #[mime_type(text/javascript)]
