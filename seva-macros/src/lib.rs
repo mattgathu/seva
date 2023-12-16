@@ -82,6 +82,17 @@ fn derive_mime_type(node: &DeriveInput) -> Result<TokenStream> {
                 #ty::#variant => #mime_type,
             }
         });
+    let from_ext_impls = input.variants.iter().map(|v| {
+        let var = &v.ident;
+        let ext: String = if v.mime_ext.is_none() {
+            format!("{}", var).to_lowercase()
+        } else {
+            extract_mime_ext(&v.mime_ext.unwrap().meta)
+        };
+        quote! {
+            #ext => Some(#ty::#var),
+        }
+    });
 
     Ok(quote! {
         impl #impl_generics ::core::fmt::Display for #ty #ty_generics #where_clause {
@@ -90,6 +101,15 @@ fn derive_mime_type(node: &DeriveInput) -> Result<TokenStream> {
                      #(#mime_impls)*
                 };
                 write!(f, "{}", s)
+            }
+        }
+        impl #impl_generics #ty #ty_generics #where_clause {
+            ///Get mime type from file extension
+            pub fn from_ext(ext: String) -> Option<#ty> {
+                match ext.to_lowercase().as_str() {
+                    #(#from_ext_impls)*
+                    _ => None
+                }
             }
         }
     })
@@ -204,4 +224,21 @@ fn get_mime_type_attr(input: &[Attribute]) -> Option<&Attribute> {
 
 fn get_mime_ext_attr(input: &[Attribute]) -> Option<&Attribute> {
     input.iter().find(|&attr| attr.path().is_ident("mime_ext"))
+}
+
+fn extract_mime_ext(meta: &Meta) -> String {
+    let mut s = String::new();
+    match meta {
+        Meta::List(ml) => {
+            for tok in ml.tokens.clone() {
+                match tok {
+                    TokenTree::Literal(lit) => s.push_str(&format!("{}", lit)),
+                    TokenTree::Ident(id) => s.push_str(&format!("{}", id)),
+                    _ => unreachable!(),
+                }
+            }
+        }
+        _ => unreachable!(),
+    }
+    s
 }
