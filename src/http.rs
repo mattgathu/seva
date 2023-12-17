@@ -2,11 +2,9 @@
 use anyhow::Result;
 use bytes::Bytes;
 use chrono::{DateTime, Local};
-use pest::iterators::Pair;
-use pest::Parser as PestParser;
+use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
-use seva_macros::HttpStatusCode;
-use seva_macros::MimeType;
+use seva_macros::{HttpStatusCode, MimeType};
 use std::fmt::Display;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,7 +40,9 @@ impl Request {
 }
 impl<'i> TryFrom<Pair<'i, Rule>> for Request {
     type Error = anyhow::Error;
-    fn try_from(pair: Pair<'i, Rule>) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(
+        pair: Pair<'i, Rule>,
+    ) -> std::prelude::v1::Result<Self, Self::Error> {
         let mut iterator = pair.into_inner();
         let req = Self {
             method: iterator.next().unwrap().try_into()?,
@@ -68,28 +68,36 @@ pub struct Body {
 }
 
 // TODO: move all http stuff to http module
-/// HTTP defines a set of request methods to indicate the desired action to be performed for a given resource.
+/// HTTP defines a set of request methods to indicate the desired action to be
+/// performed for a given resource.
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Methods
 #[derive(Debug, Clone, PartialEq, Eq, Copy)]
 pub enum HttpMethod {
-    /// The CONNECT method establishes a tunnel to the server identified by the target resource.
+    /// The CONNECT method establishes a tunnel to the server identified by the
+    /// target resource.
     Connect,
     /// The DELETE method deletes the specified resource.
     Delete,
-    /// The GET method requests a representation of the specified resource. Requests using GET should only retrieve data.
+    /// The GET method requests a representation of the specified resource.
+    /// Requests using GET should only retrieve data.
     Get,
-    /// The HEAD method asks for a response identical to a GET request, but without the response body.
+    /// The HEAD method asks for a response identical to a GET request, but
+    /// without the response body.
     Head,
-    /// The OPTIONS method describes the communication options for the target resource.
+    /// The OPTIONS method describes the communication options for the target
+    /// resource.
     Options,
     /// The PATCH method applies partial modifications to a resource.
     Patch,
-    /// The POST method submits an entity to the specified resource, often causing a change in state or side effects on the server
+    /// The POST method submits an entity to the specified resource, often
+    /// causing a change in state or side effects on the server
     Post,
-    /// The PUT method replaces all current representations of the target resource with the request payload.
+    /// The PUT method replaces all current representations of the target
+    /// resource with the request payload.
     Put,
-    /// The TRACE method performs a message loop-back test along the path to the target resource.
+    /// The TRACE method performs a message loop-back test along the path to the
+    /// target resource.
     Trace,
 }
 #[derive(Debug, Clone)]
@@ -109,7 +117,9 @@ impl Display for HttpMethodParseError {
 
 impl<'i> TryFrom<Pair<'i, Rule>> for HttpMethod {
     type Error = HttpMethodParseError;
-    fn try_from(value: Pair<'i, Rule>) -> std::prelude::v1::Result<Self, Self::Error> {
+    fn try_from(
+        value: Pair<'i, Rule>,
+    ) -> std::prelude::v1::Result<Self, Self::Error> {
         match value.as_str() {
             "CONNECT" => Ok(HttpMethod::Connect),
             "DELETE" => Ok(HttpMethod::Delete),
@@ -196,14 +206,15 @@ impl From<HeaderName> for String {
     }
 }
 
-/// HTTP response status codes indicate whether a specific HTTP request has been successfully completed
+/// HTTP response status codes indicate whether a specific HTTP request has been
+/// successfully completed
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
 #[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq, Copy)]
 pub enum StatusCode {
     // Informational
-    /// This code is sent in response to an Upgrade request header from the client and
-    /// indicates the protocol the server is switching to.
+    /// This code is sent in response to an Upgrade request header from the
+    /// client and indicates the protocol the server is switching to.
     #[code(101)]
     SwitchingProtocols,
     // Success
@@ -213,39 +224,45 @@ pub enum StatusCode {
     /// There is no content to send for this request
     #[code(204)]
     NoContent,
-    /// This response code is used when the Range header is sent from the client to request only part of a resource.
+    /// This response code is used when the Range header is sent from the client
+    /// to request only part of a resource.
     #[code(206)]
     PartialContent,
     // Redirection
-    /// This is used for caching purposes. It tells the client that the response has not
-    /// been modified, so the client can continue to use the same cached version of the response.
+    /// This is used for caching purposes. It tells the client that the response
+    /// has not been modified, so the client can continue to use the same
+    /// cached version of the response.
     #[code(206)]
     NotModified,
     // Client Errors
-    /// The server cannot or will not process the request due to something that is perceived to be
-    /// a client error.
+    /// The server cannot or will not process the request due to something that
+    /// is perceived to be a client error.
     #[code(400)]
     BadRequest,
-    /// The client does not have access rights to the content; that is, it is unauthorized,
-    /// so the server is refusing to give the requested resource.
+    /// The client does not have access rights to the content; that is, it is
+    /// unauthorized, so the server is refusing to give the requested
+    /// resource.
     #[code(403)]
     Forbidden,
     /// The server cannot find the requested resource
     #[code(404)]
     NotFound,
-    /// The request method is known by the server but is not supported by the target resource.
+    /// The request method is known by the server but is not supported by the
+    /// target resource.
     #[code(405)]
     MethodNotAllowed,
     /// Request entity is larger than limits defined by server.
     #[code(413)]
     PayloadTooLarge,
-    /// The URI requested by the client is longer than the server is willing to interpret.
+    /// The URI requested by the client is longer than the server is willing to
+    /// interpret.
     #[code(414)]
     UriTooLong,
     /// This response is sent on an idle connection
     #[code(408)]
     RequestTimeout,
-    /// The user has sent too many requests in a given amount of time ("rate limiting").
+    /// The user has sent too many requests in a given amount of time ("rate
+    /// limiting").
     #[code(429)]
     TooManyRequests,
     // Server Errors
@@ -258,7 +275,8 @@ pub enum StatusCode {
     /// The HTTP version used in the request is not supported by the server.
     #[code(505)]
     HttpVersionNotSupported,
-    /// Further extensions to the request are required for the server to fulfill it.
+    /// Further extensions to the request are required for the server to fulfill
+    /// it.
     #[code(510)]
     NotExtended,
 }

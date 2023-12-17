@@ -2,16 +2,17 @@ extern crate proc_macro;
 
 use proc_macro2::Literal;
 
-use proc_macro2::TokenStream;
-use proc_macro2::TokenTree;
+use proc_macro2::{TokenStream, TokenTree};
 use quote::quote;
-use syn::Meta;
 use syn::{
-    parse_macro_input, Attribute, Data, DataEnum, DeriveInput, Error, Generics, Ident, Result,
+    parse_macro_input, Attribute, Data, DataEnum, DeriveInput, Error, Generics,
+    Ident, Meta, Result,
 };
 
 #[proc_macro_derive(HttpStatusCode, attributes(code))]
-pub fn http_status_code_derive(input: proc_macro::TokenStream) -> proc_macro::TokenStream {
+pub fn http_status_code_derive(
+    input: proc_macro::TokenStream,
+) -> proc_macro::TokenStream {
     let input = parse_macro_input!(input as DeriveInput);
     derive(&input)
         .unwrap_or_else(|err| err.to_compile_error())
@@ -39,18 +40,20 @@ fn derive_mime_type(node: &DeriveInput) -> Result<TokenStream> {
     let ty = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let mime_impls = input
-        .variants
-        .iter()
-        .filter(|v| v.mime_type.is_some())
-        .map(|variant| {
-            let mime_type: String = extract_mime_type(&variant.mime_type.unwrap().meta);
-            let variant = &variant.ident;
+    let mime_impls =
+        input
+            .variants
+            .iter()
+            .filter(|v| v.mime_type.is_some())
+            .map(|variant| {
+                let mime_type: String =
+                    extract_mime_type(&variant.mime_type.unwrap().meta);
+                let variant = &variant.ident;
 
-            quote! {
-                #ty::#variant => #mime_type,
-            }
-        });
+                quote! {
+                    #ty::#variant => #mime_type,
+                }
+            });
     let from_ext_impls = input.variants.iter().map(|v| {
         let var = &v.ident;
         let ext: String = if v.mime_ext.is_none() {
@@ -89,32 +92,33 @@ fn derive(node: &DeriveInput) -> Result<TokenStream> {
     let ty = &input.ident;
     let (impl_generics, ty_generics, where_clause) = input.generics.split_for_impl();
 
-    let status_code_impls = input
-        .variants
-        .iter()
-        .filter(|v| v.code.is_some())
-        .map(|variant| {
-            let code: Literal = match &variant.code.unwrap().meta {
-                Meta::List(ml) => {
-                    let tok = ml
-                        .tokens
-                        .clone()
-                        .into_iter()
-                        .next()
-                        .expect("missing status code number");
-                    match tok {
-                        TokenTree::Literal(lit) => lit,
-                        _ => unreachable!(),
+    let status_code_impls =
+        input
+            .variants
+            .iter()
+            .filter(|v| v.code.is_some())
+            .map(|variant| {
+                let code: Literal = match &variant.code.unwrap().meta {
+                    Meta::List(ml) => {
+                        let tok = ml
+                            .tokens
+                            .clone()
+                            .into_iter()
+                            .next()
+                            .expect("missing status code number");
+                        match tok {
+                            TokenTree::Literal(lit) => lit,
+                            _ => unreachable!(),
+                        }
                     }
-                }
-                _ => unreachable!(),
-            };
-            let variant = &variant.ident;
+                    _ => unreachable!(),
+                };
+                let variant = &variant.ident;
 
-            quote! {
-                #ty::#variant => #code,
-            }
-        });
+                quote! {
+                    #ty::#variant => #code,
+                }
+            });
     let status_msg_impls = input.variants.iter().map(|var| {
         let variant = &var.ident;
         let name = format!("{}", variant);

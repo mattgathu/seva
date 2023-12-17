@@ -1,53 +1,61 @@
 #![allow(unused)]
-use crate::fs::{DirEntry, EntryType};
-use crate::http::{Header, HttpMethod, Response, StatusCode};
-use crate::http::{MimeType, Request};
+use crate::{
+    fs::{DirEntry, EntryType},
+    http::{Header, HttpMethod, MimeType, Request, Response, StatusCode},
+};
 use anyhow::Result;
-use bytes::Bytes;
-use bytes::{Buf, BufMut, BytesMut};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
 use chrono::{DateTime, Local, Utc};
 use handlebars::Handlebars;
-use pest::iterators::{Pair, Pairs};
-use pest::Parser as PestParser;
+use pest::{
+    iterators::{Pair, Pairs},
+    Parser as PestParser,
+};
 use pest_derive::Parser as PestDeriveParser;
 use serde::Serialize;
 use seva_macros::HttpStatusCode;
-use std::collections::HashMap;
-use std::ffi::OsString;
-use std::fmt::format;
-use std::fs::Metadata;
-use std::io::ErrorKind;
-use std::path::Path;
-use std::path::PathBuf;
-use std::str::FromStr;
-use std::time::SystemTime;
-use std::{fmt::Display, net::SocketAddr};
-use tokio::io::BufReader;
-use tokio::io::BufWriter;
-use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
+use std::{
+    collections::HashMap,
+    ffi::OsString,
+    fmt::{format, Display},
+    fs::Metadata,
+    io::ErrorKind,
+    net::SocketAddr,
+    path::{Path, PathBuf},
+    str::FromStr,
+    time::SystemTime,
+};
 use tokio::{
     fs::read_dir,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt},
-    net::{TcpListener, TcpStream},
+    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
+    net::{
+        tcp::{OwnedReadHalf, OwnedWriteHalf},
+        TcpListener, TcpStream,
+    },
     task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
 
 const MAX_URI_LEN: usize = 65537;
 
-/// An HTTP "server" is a program that accepts connections in order to service HTTP requests by sending HTTP responses.
+/// An HTTP "server" is a program that accepts connections in order to service
+/// HTTP requests by sending HTTP responses.
 ///
-/// HTTP is a stateless request/response protocol for exchanging "messages" across a connection.
+/// HTTP is a stateless request/response protocol for exchanging "messages"
+/// across a connection.
 ///
-/// A client sends requests to a server in the form of a "request" message with a method and request target.
-/// The request might also contain header fields for request modifiers, client information,
-/// and representation metadata, content intended for processing in accordance with the method,
-/// and trailer fields to communicate information collected while sending the content.
+/// A client sends requests to a server in the form of a "request" message with
+/// a method and request target. The request might also contain header fields
+/// for request modifiers, client information, and representation metadata,
+/// content intended for processing in accordance with the method, and trailer
+/// fields to communicate information collected while sending the content.
 ///
-/// A server responds to a client's request by sending one or more "response" messages,
-/// each including a status code. The response might also contain header fields for server information,
-/// resource metadata, and representation metadata, content to be interpreted in accordance with the
-/// status code, and trailer fields to communicate information collected while sending the content.
+/// A server responds to a client's request by sending one or more "response"
+/// messages, each including a status code. The response might also contain
+/// header fields for server information, resource metadata, and representation
+/// metadata, content to be interpreted in accordance with the status code, and
+/// trailer fields to communicate information collected while sending the
+/// content.
 ///
 /// Ref: https://www.rfc-editor.org/rfc/rfc9110
 pub struct HttpServer {
@@ -88,7 +96,8 @@ impl HttpServer {
                     // handle conn
                     let dir = self.dir.clone();
                     let join = tokio::spawn(async move {
-                        let mut handler = RequestHandler::new(stream, client_addr, dir);
+                        let mut handler =
+                            RequestHandler::new(stream, client_addr, dir);
                         handler.handle().await
                     });
                     self.handles.push(join);
@@ -104,7 +113,11 @@ impl HttpServer {
         }
         Ok(())
     }
-    async fn handle_stream(&mut self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
+    async fn handle_stream(
+        &mut self,
+        stream: TcpStream,
+        addr: SocketAddr,
+    ) -> Result<()> {
         Ok(())
     }
 
@@ -122,7 +135,11 @@ struct RequestHandler {
     protocol: String,
 }
 impl RequestHandler {
-    fn new(stream: TcpStream, client_addr: SocketAddr, dir: PathBuf) -> RequestHandler {
+    fn new(
+        stream: TcpStream,
+        client_addr: SocketAddr,
+        dir: PathBuf,
+    ) -> RequestHandler {
         let (rdr, wrt) = stream.into_split();
         let reader = BufReader::new(rdr);
         let writer = BufWriter::new(wrt);
@@ -218,20 +235,14 @@ impl RequestHandler {
         Ok(())
     }
     async fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
-        let mime_type = self.get_mime_type(entry.ext.as_ref());
         let mut file = tokio::fs::File::open(&entry.name).await?;
         self.send_resp_line(StatusCode::Ok).await?;
-        self.send_header(&Header::new("Server", "seva/0.1.0"))
+        let file_headers = self.get_file_headers(entry);
+        self.send_headers(&file_headers).await?;
+        self.send_hdr(&Header::new("Server", "seva/0.1.0")).await?;
+        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))
             .await?;
-        self.send_header(&mime_type.into()).await?;
-        self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
-            .await?;
-        self.send_header(&Header::new("Last-Modified", entry.modified.to_rfc2822()))
-            .await?;
-        self.send_header(&Header::new("Content-Length", format!("{}", entry.size)))
-            .await?;
-        self.send_header(&Header::new("Connection", "close"))
-            .await?;
+        self.send_hdr(&Header::new("Connection", "close")).await?;
         self.end_headers().await?;
 
         if req.method != HttpMethod::Head {
@@ -247,6 +258,15 @@ impl RequestHandler {
         debug!("mime type lookup for: {ext:?}");
         ext.and_then(|e| MimeType::from_ext(e.to_string()))
             .unwrap_or(MimeType::Bin)
+    }
+
+    fn get_file_headers(&self, entry: &DirEntry) -> Vec<Header> {
+        let mime_type = self.get_mime_type(entry.ext.as_ref());
+        vec![
+            mime_type.into(),
+            Header::new("Last-Modified", entry.modified.to_rfc2822()),
+            Header::new("Content-Length", format!("{}", entry.size)),
+        ]
     }
 
     async fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
@@ -301,12 +321,10 @@ impl RequestHandler {
     }
     async fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
         self.send_resp_line(r.status).await?;
-        self.send_header(&Header::new("Server", "seva/0.1.0"))
+        self.send_hdr(&Header::new("Server", "seva/0.1.0")).await?;
+        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))
             .await?;
-        self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
-            .await?;
-        self.send_header(&Header::new("Connection", "close"))
-            .await?;
+        self.send_hdr(&Header::new("Connection", "close")).await?;
         self.end_headers().await?;
         let bytes_sent = if let Some(body) = r.body {
             self.send_body(body).await?
@@ -328,7 +346,14 @@ impl RequestHandler {
         Ok(sz)
     }
 
-    async fn send_header(&mut self, hdr: &Header) -> Result<()> {
+    async fn send_headers(&mut self, headers: &[Header]) -> Result<()> {
+        for hdr in headers {
+            self.send_hdr(hdr).await?;
+        }
+        Ok(())
+    }
+
+    async fn send_hdr(&mut self, hdr: &Header) -> Result<()> {
         let h = format!("{}: {}\r\n", hdr.name, hdr.value);
         self.writer.write_all(h.as_bytes()).await?;
         Ok(())

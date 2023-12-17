@@ -1,8 +1,7 @@
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::fs::Metadata;
-use std::time::SystemTime;
+use std::{fs::Metadata, time::SystemTime};
 
 #[derive(Debug, Serialize)]
 pub struct DirEntry {

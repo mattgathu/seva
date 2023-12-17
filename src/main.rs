@@ -6,19 +6,19 @@ use bytes::Bytes;
 use clap::Parser;
 use handlebars::Handlebars;
 use serde::Serialize;
-use std::fmt;
-use std::future::Future;
-use std::marker::PhantomData;
-use std::net::SocketAddr;
-use std::pin::Pin;
-use std::rc::Rc;
-use std::sync::Arc;
-use std::time::SystemTime;
-use std::{env, path::PathBuf, time::Duration};
-use tokio::net::TcpListener;
-use tokio::net::TcpStream;
-use tracing::debug;
-use tracing::{info, Level};
+use std::{
+    env, fmt,
+    future::Future,
+    marker::PhantomData,
+    net::SocketAddr,
+    path::PathBuf,
+    pin::Pin,
+    rc::Rc,
+    sync::Arc,
+    time::{Duration, SystemTime},
+};
+use tokio::net::{TcpListener, TcpStream};
+use tracing::{debug, info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod fs;
@@ -71,7 +71,6 @@ struct DirServer {
     // todo
     // workers
     // configuration
-    //
     listener: TcpListener,
     dir: Arc<PathBuf>,
 }
@@ -92,7 +91,9 @@ impl DirServer {
                 let ctxt = RequestContext {
                     dir: self.dir.clone(),
                 };
-                tokio::spawn(async move { Self::handle_stream(sock, peer_addr, ctxt).await });
+                tokio::spawn(async move {
+                    Self::handle_stream(sock, peer_addr, ctxt).await
+                });
             }
         }
     }
@@ -116,7 +117,8 @@ async fn main() -> Result<()> {
         .with_file(false)
         .with_line_number(false)
         .finish();
-    tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
+    tracing::subscriber::set_global_default(subscriber)
+        .expect("setting default subscriber failed");
 
     let dir = match args.directory.as_str() {
         "." => env::current_dir()?,
