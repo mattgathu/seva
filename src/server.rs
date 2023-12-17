@@ -1,7 +1,7 @@
 #![allow(unused)]
 use crate::fs::{DirEntry, EntryType};
-use crate::http::Request;
 use crate::http::{Header, HttpMethod, Response, StatusCode};
+use crate::http::{MimeType, Request};
 use anyhow::Result;
 use bytes::Bytes;
 use bytes::{Buf, BufMut, BytesMut};
@@ -218,14 +218,12 @@ impl RequestHandler {
         Ok(())
     }
     async fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
-        //TODO: implement mime type guesser
-        let mime_type = self.get_mime_type(&entry.name)?;
+        let mime_type = self.get_mime_type(entry.ext.as_ref());
         let mut file = tokio::fs::File::open(&entry.name).await?;
         self.send_resp_line(StatusCode::Ok).await?;
         self.send_header(&Header::new("Server", "seva/0.1.0"))
             .await?;
-        self.send_header(&Header::new("Content-Type", mime_type))
-            .await?;
+        self.send_header(&mime_type.into()).await?;
         self.send_header(&Header::new("Date", Local::now().to_rfc2822()))
             .await?;
         self.send_header(&Header::new("Last-Modified", entry.modified.to_rfc2822()))
@@ -245,9 +243,10 @@ impl RequestHandler {
         Ok(())
     }
 
-    fn get_mime_type(&self, path: &str) -> Result<String> {
-        let default = "application/octet-stream".to_string();
-        Ok(default)
+    fn get_mime_type(&self, ext: Option<&String>) -> MimeType {
+        debug!("mime type lookup for: {ext:?}");
+        ext.and_then(|e| MimeType::from_ext(e.to_string()))
+            .unwrap_or(MimeType::Bin)
     }
 
     async fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {

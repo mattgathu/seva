@@ -44,38 +44,7 @@ fn derive_mime_type(node: &DeriveInput) -> Result<TokenStream> {
         .iter()
         .filter(|v| v.mime_type.is_some())
         .map(|variant| {
-            let mime_type: String = match &variant.mime_type.unwrap().meta {
-                Meta::List(ml) => {
-                    let mut mt = String::new();
-                    let tok = ml
-                        .tokens
-                        .clone()
-                        .into_iter()
-                        .next()
-                        .expect("missing mime type tokens");
-                    match tok {
-                        TokenTree::Ident(id) => mt.push_str(&format!("{}", id)),
-                        TokenTree::Literal(lit) => mt.push_str(&format!("{}", lit)),
-                        TokenTree::Punct(p) => mt.push_str(&format!("{}", p)),
-                        TokenTree::Group(g) => {
-                            for t in g.stream() {
-                                match t {
-                                    TokenTree::Ident(id) => mt.push_str(&format!("{}", id)),
-                                    TokenTree::Literal(lit) => mt.push_str(&format!("{}", lit)),
-                                    TokenTree::Punct(p) => mt.push_str(&format!("{}", p)),
-                                    _ => unreachable!(),
-                                }
-                            }
-                        }
-                    }
-
-                    if mt.is_empty() {
-                        panic!("Got empty mime type");
-                    }
-                    mt
-                }
-                _ => unreachable!(),
-            };
+            let mime_type: String = extract_mime_type(&variant.mime_type.unwrap().meta);
             let variant = &variant.ident;
 
             quote! {
@@ -241,4 +210,34 @@ fn extract_mime_ext(meta: &Meta) -> String {
         _ => unreachable!(),
     }
     s
+}
+
+fn extract_mime_type(meta: &Meta) -> String {
+    match meta {
+        Meta::List(ml) => {
+            let mt = flatten_token_stream(ml.tokens.clone());
+
+            if mt.is_empty() {
+                panic!("Got empty mime type");
+            }
+            mt
+        }
+        _ => unreachable!(),
+    }
+}
+
+fn flatten_token_stream(ts: TokenStream) -> String {
+    let mut tokens = String::new();
+    for tt in ts {
+        match tt {
+            TokenTree::Group(g) => {
+                let toks = flatten_token_stream(g.stream());
+                tokens.push_str(&toks);
+            }
+            TokenTree::Ident(i) => tokens.push_str(&format!("{}", i)),
+            TokenTree::Punct(p) => tokens.push_str(&format!("{}", p.as_char())),
+            TokenTree::Literal(l) => tokens.push_str(&format!("{}", l)),
+        }
+    }
+    tokens
 }
