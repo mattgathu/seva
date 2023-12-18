@@ -2,3 +2,4 @@
 /quic
 .vscode/
 *.mp3
+.DS_Store

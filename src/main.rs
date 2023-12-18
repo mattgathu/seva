@@ -36,7 +36,7 @@ struct Args {
     directory: String,
 
     /// Http port to listen on.
-    #[arg(short, long, default_value = "8000")]
+    #[arg(short, long, default_value = "7000")]
     port: u16,
 
     /// Interface to bind to.

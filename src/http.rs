@@ -32,8 +32,7 @@ impl Request {
             let value = hdr.next().unwrap().as_str().to_string();
             headers.push(Header::new(name, value))
         }
-        //TODO: remove clone
-        headers.sort_by_key(|hdr| hdr.name.clone());
+        headers.sort();
 
         Ok(headers)
     }
@@ -67,7 +66,6 @@ pub struct Body {
     // todo
 }
 
-// TODO: move all http stuff to http module
 /// HTTP defines a set of request methods to indicate the desired action to be
 /// performed for a given resource.
 ///
@@ -179,7 +177,7 @@ impl Display for HttpMethod {
         f.write_str(&String::from(*self))
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Header {
     pub name: String,
     pub value: String,

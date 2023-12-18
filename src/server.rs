@@ -186,9 +186,7 @@ impl RequestHandler {
             // process entry
             match entry.file_type {
                 EntryType::File => self.send_file(&req, &entry).await?,
-                EntryType::Link => {
-                    //TODO
-                }
+                EntryType::Link => self.send_file(&req, &entry).await?,
                 EntryType::Dir => {
                     self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)
                         .await?
@@ -210,6 +208,7 @@ impl RequestHandler {
         Ok(())
     }
     async fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
+        debug!("serving dir: {}", path.display());
         let hb = Handlebars::new();
         let template = tokio::fs::read_to_string("index.html").await?;
 
@@ -282,6 +281,7 @@ impl RequestHandler {
             }
         }
     }
+    //TODO: optimize to be zero-copy
     async fn read_request(&mut self) -> Result<String> {
         let mut lines = vec![];
         loop {

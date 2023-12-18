@@ -23,9 +23,15 @@ impl DirEntry {
     }
     pub fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {
         let ext = name.rsplit_once('.').map(|(_, e)| e.to_string());
+        let file_type = EntryType::from(meta.file_type());
+        let name = if file_type == EntryType::Dir {
+            format!("{}/", name)
+        } else {
+            name.to_string()
+        };
         Ok(Self {
-            name: name.to_string(),
-            file_type: EntryType::from(meta.file_type()),
+            name,
+            file_type,
             ext,
             modified: Self::dt(meta.modified()?)?,
             created: Self::dt(meta.created()?)?,
@@ -34,7 +40,7 @@ impl DirEntry {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, PartialEq, Eq)]
 pub enum EntryType {
     File,
     Link,
