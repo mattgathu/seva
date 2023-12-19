@@ -210,12 +210,11 @@ impl RequestHandler {
     async fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
         debug!("serving dir: {}", path.display());
         let hb = Handlebars::new();
-        let template = tokio::fs::read_to_string("index.html").await?;
 
         let dir_entries = Self::build_dir_entries(path).await?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
-        let index = hb.render_template(&template, &data)?;
+        let index = hb.render_template(DIR_TEMPLATE, &data)?;
         let body = if req.method == HttpMethod::Head {
             None
         } else {
@@ -426,3 +425,29 @@ impl RequestHandler {
         Ok(path)
     }
 }
+
+const DIR_TEMPLATE: &str = r#"
+<!DOCTYPE html>
+<html lang="en-us">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width">
+<title>Directory Listing for {{path}}</title>
+<style>
+html {
+  font-family: sans-serif;
+}
+</style>
+</head>
+<body>
+<h1>Directory Listing for {{path}}</h1>
+<hr>
+<ul>
+{{#each entries as |e| }}
+<li><a href={{name}}>{{name}}</a></li>
+{{/each}}
+</ul>
+<hr>
+</body>
+</html>
+"#;
