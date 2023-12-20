@@ -18,21 +18,13 @@ use std::{
     collections::HashMap,
     ffi::OsString,
     fmt::{format, Display},
-    fs::Metadata,
-    io::ErrorKind,
-    net::SocketAddr,
+    fs::{metadata, read_dir, File, Metadata},
+    io::{BufReader, BufWriter, ErrorKind, Read, Write},
+    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
     path::{Path, PathBuf},
     str::FromStr,
+    sync::Arc,
     time::SystemTime,
-};
-use tokio::{
-    fs::read_dir,
-    io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt, BufReader, BufWriter},
-    net::{
-        tcp::{OwnedReadHalf, OwnedWriteHalf},
-        TcpListener, TcpStream,
-    },
-    task::JoinHandle,
 };
 use tracing::{debug, error, info, warn};
 
@@ -64,60 +56,50 @@ pub struct HttpServer {
     dir: PathBuf,
     listener: TcpListener,
     shut_down: bool,
-    handles: Vec<JoinHandle<Result<()>>>,
 }
 
 impl HttpServer {
-    pub async fn new(host: String, port: u16, dir: PathBuf) -> Result<HttpServer> {
-        let listener = TcpListener::bind((host.clone(), port)).await?;
+    pub fn new(host: String, port: u16, dir: PathBuf) -> Result<HttpServer> {
+        let listener = TcpListener::bind((host.clone(), port))?;
         let shut_down = false;
-        let handles = vec![];
         Ok(Self {
             host,
             port,
             dir,
             listener,
             shut_down,
-            handles,
         })
     }
     fn shut_down(&mut self) -> Result<()> {
         //todo
         Ok(())
     }
-    pub async fn run(&mut self) -> Result<()> {
-        //todo
-        // 1. check for new conn
-        // 2. spawn task to handle new conn
-        // 3. repeat
+    pub fn run(&mut self) -> Result<()> {
         loop {
-            match self.listener.accept().await {
+            //TODO check for shutdown signal
+            match self.listener.accept() {
                 Ok((stream, client_addr)) => {
-                    // handle conn
                     let dir = self.dir.clone();
-                    let join = tokio::spawn(async move {
-                        let mut handler =
-                            RequestHandler::new(stream, client_addr, dir);
-                        handler.handle().await
-                    });
-                    self.handles.push(join);
+                    let mut handler = RequestHandler::new(stream, client_addr, dir);
+                    match handler.handle() {
+                        Ok(_) => {}
+                        Err(e) => {
+                            error!("got error while handling request: {e}")
+                        }
+                    }
                 }
                 Err(e) => {
                     // handle error
                     error!("failed to accept new tcp connection. Reason: {e}");
                 }
-            }
+            };
             if self.shut_down {
                 self.shut_down()?;
             }
         }
         Ok(())
     }
-    async fn handle_stream(
-        &mut self,
-        stream: TcpStream,
-        addr: SocketAddr,
-    ) -> Result<()> {
+    fn handle_stream(&mut self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
         Ok(())
     }
 
@@ -127,8 +109,7 @@ impl HttpServer {
 }
 
 struct RequestHandler {
-    reader: BufReader<OwnedReadHalf>,
-    writer: BufWriter<OwnedWriteHalf>,
+    stream: TcpStream,
     client_addr: SocketAddr,
     dir: PathBuf,
     //TODO: find better place
@@ -140,22 +121,18 @@ impl RequestHandler {
         client_addr: SocketAddr,
         dir: PathBuf,
     ) -> RequestHandler {
-        let (rdr, wrt) = stream.into_split();
-        let reader = BufReader::new(rdr);
-        let writer = BufWriter::new(wrt);
         let protocol = "HTTP/1.1".to_owned();
 
         RequestHandler {
-            reader,
-            writer,
+            stream,
             client_addr,
             dir,
             protocol,
         }
     }
-    async fn handle(&mut self) -> Result<()> {
+    fn handle(&mut self) -> Result<()> {
         //todo
-        match self._handle().await {
+        match self._handle() {
             Ok(_) => {
                 // TODO
             }
@@ -166,9 +143,8 @@ impl RequestHandler {
         Ok(())
     }
 
-    async fn map_dir(&mut self) -> Result<HashMap<String, DirEntry>> {
-        let map = Self::build_dir_entries(&self.dir)
-            .await?
+    fn map_dir(&mut self) -> Result<HashMap<String, DirEntry>> {
+        let map = Self::build_dir_entries(&self.dir)?
             .into_iter()
             .map(|e| (e.name.clone(), e))
             .collect();
@@ -176,20 +152,19 @@ impl RequestHandler {
         Ok(map)
     }
 
-    async fn _handle(&mut self) -> Result<()> {
-        let req = Request::parse(&self.read_request().await?)?;
-        let dir_map = self.map_dir().await?;
-        let req_path = Self::parse_req_path(&req.path).await?;
+    fn _handle(&mut self) -> Result<()> {
+        let req = Request::parse(&self.read_request()?)?;
+        let dir_map = self.map_dir()?;
+        let req_path = Self::parse_req_path(&req.path)?;
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
-            self.serve_dir(&req, &self.dir.clone()).await?;
-        } else if let Some(entry) = self.lookup_path(&req_path).await? {
+            self.serve_dir(&req, &self.dir.clone())?;
+        } else if let Some(entry) = self.lookup_path(&req_path)? {
             // process entry
             match entry.file_type {
-                EntryType::File => self.send_file(&req, &entry).await?,
-                EntryType::Link => self.send_file(&req, &entry).await?,
+                EntryType::File => self.send_file(&req, &entry)?,
+                EntryType::Link => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
-                    self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)
-                        .await?
+                    self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)?
                 }
                 EntryType::Other => {
                     //TODO
@@ -203,15 +178,16 @@ impl RequestHandler {
                 headers: vec![],
                 body: None,
             };
-            self.send_response(resp, &req).await?;
+            self.send_response(resp, &req)?;
         }
+        self.stream.shutdown(Shutdown::Both).ok();
         Ok(())
     }
-    async fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
+    fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
         debug!("serving dir: {}", path.display());
         let hb = Handlebars::new();
 
-        let dir_entries = Self::build_dir_entries(path).await?;
+        let dir_entries = Self::build_dir_entries(path)?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
         let index = hb.render_template(DIR_TEMPLATE, &data)?;
@@ -228,25 +204,24 @@ impl RequestHandler {
             body,
         };
 
-        self.send_response(resp, req).await?;
+        self.send_response(resp, req)?;
 
         Ok(())
     }
-    async fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
-        let mut file = tokio::fs::File::open(&entry.name).await?;
-        self.send_resp_line(StatusCode::Ok).await?;
+    fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
+        let mut file = File::open(&entry.name)?;
+        self.send_resp_line(StatusCode::Ok)?;
         let file_headers = self.get_file_headers(entry);
-        self.send_headers(&file_headers).await?;
-        self.send_hdr(&Header::new("Server", "seva/0.1.0")).await?;
-        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))
-            .await?;
-        self.send_hdr(&Header::new("Connection", "close")).await?;
-        self.end_headers().await?;
+        self.send_headers(&file_headers)?;
+        self.send_hdr(&Header::new("Server", "seva/0.1.0"))?;
+        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))?;
+        self.send_hdr(&Header::new("Connection", "close"))?;
+        self.end_headers()?;
 
         if req.method != HttpMethod::Head {
-            tokio::io::copy(&mut file, &mut self.writer).await?;
+            std::io::copy(&mut file, &mut self.stream)?;
         }
-        self.writer.shutdown().await?;
+        self.stream.shutdown(Shutdown::Both)?;
 
         self.log_response(req, StatusCode::Ok, entry.size as usize);
         Ok(())
@@ -267,9 +242,9 @@ impl RequestHandler {
         ]
     }
 
-    async fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
+    fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
         let fpath = self.dir.join(path);
-        match tokio::fs::metadata(fpath).await {
+        match metadata(fpath) {
             Ok(meta) => Ok(Some(DirEntry::from_metadata(meta, path)?)),
             Err(e) => {
                 if e.kind() == ErrorKind::NotFound {
@@ -281,11 +256,11 @@ impl RequestHandler {
         }
     }
     //TODO: optimize to be zero-copy
-    async fn read_request(&mut self) -> Result<String> {
+    fn read_request(&mut self) -> Result<String> {
         let mut lines = vec![];
         loop {
             let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
-            self.read_line(&mut buf, MAX_URI_LEN).await?;
+            self.read_line(&mut buf, MAX_URI_LEN)?;
             let s = String::from_utf8(buf.to_vec())?;
             let len = s.len();
             lines.push(s);
@@ -301,64 +276,62 @@ impl RequestHandler {
     }
 
     //TODO: optimize
-    async fn read_line(&mut self, buf: &mut BytesMut, limit: usize) -> Result<()> {
+    fn read_line(&mut self, buf: &mut BytesMut, limit: usize) -> Result<()> {
         let mut sz = 0usize;
         loop {
             if sz == limit {
                 break;
             } else {
-                let b = self.reader.read_u8().await?;
-                if b as char == '\n' {
+                let mut b = [0u8; 1];
+                self.stream.read_exact(&mut b)?;
+                if b[0] as char == '\n' {
                     break;
                 } else {
-                    buf.put_u8(b);
+                    buf.put_u8(b[0]);
                 }
                 sz += 1;
             }
         }
         Ok(())
     }
-    async fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
-        self.send_resp_line(r.status).await?;
-        self.send_hdr(&Header::new("Server", "seva/0.1.0")).await?;
-        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))
-            .await?;
-        self.send_hdr(&Header::new("Connection", "close")).await?;
-        self.end_headers().await?;
+    fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
+        debug!("sending response");
+        self.send_resp_line(r.status)?;
+        self.send_hdr(&Header::new("Server", "seva/0.1.0"))?;
+        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))?;
+        self.send_hdr(&Header::new("Connection", "close"))?;
+        self.end_headers()?;
         let bytes_sent = if let Some(body) = r.body {
-            self.send_body(body).await?
+            self.send_body(body)?
         } else {
             0
         };
-        self.writer.shutdown().await?;
+        self.stream.shutdown(Shutdown::Both)?;
         self.log_response(req, r.status, bytes_sent);
 
         Ok(())
     }
 
-    async fn send_body(&mut self, mut body: impl Buf) -> Result<usize> {
-        let mut sz = 0;
-        while body.has_remaining() {
-            self.writer.write_u8(body.get_u8()).await?;
-            sz += 1;
-        }
-        Ok(sz)
+    fn send_body(&mut self, mut body: Bytes) -> Result<usize> {
+        debug!("sending body");
+        self.stream.write_all(&body)?;
+        Ok(body.len())
     }
 
-    async fn send_headers(&mut self, headers: &[Header]) -> Result<()> {
+    fn send_headers(&mut self, headers: &[Header]) -> Result<()> {
         for hdr in headers {
-            self.send_hdr(hdr).await?;
+            self.send_hdr(hdr)?;
         }
         Ok(())
     }
 
-    async fn send_hdr(&mut self, hdr: &Header) -> Result<()> {
+    fn send_hdr(&mut self, hdr: &Header) -> Result<()> {
         let h = format!("{}: {}\r\n", hdr.name, hdr.value);
-        self.writer.write_all(h.as_bytes()).await?;
+        self.stream.write_all(h.as_bytes())?;
         Ok(())
     }
-    async fn end_headers(&mut self) -> Result<()> {
-        self.writer.write_all(b"\r\n").await?;
+    fn end_headers(&mut self) -> Result<()> {
+        self.stream.write_all(b"\r\n")?;
         Ok(())
     }
     /// Log the request using the common log format
@@ -381,7 +354,7 @@ impl RequestHandler {
         )
     }
 
-    async fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
+    fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
         let resp_line = format!(
             "{protocol} {status_code} {status_msg}\r\n",
             protocol = self.protocol,
@@ -389,22 +362,23 @@ impl RequestHandler {
             status_msg = status,
         )
         .into_bytes();
-        self.writer.write_all(&resp_line).await?;
+        self.stream.write_all(&resp_line)?;
         Ok(())
     }
 
-    async fn send_error(&mut self, code: StatusCode, reason: &str) -> Result<()> {
+    fn send_error(&mut self, code: StatusCode, reason: &str) -> Result<()> {
         error!("{code} - {reason}");
-        self.send_resp_line(code).await?;
-        self.writer.shutdown().await?;
+        self.send_resp_line(code)?;
+        self.stream.shutdown(Shutdown::Both)?;
         Ok(())
     }
 
-    async fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
+    fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
         let mut entries = vec![];
-        let mut dir_entries = tokio::fs::read_dir(dir).await?;
-        while let Some(item) = dir_entries.next_entry().await? {
-            let meta = item.metadata().await?;
+        let mut dir_entries = read_dir(dir)?;
+        for entry in dir_entries {
+            let item = entry?;
+            let meta = item.metadata()?;
             let name = format!("{}", item.file_name().to_string_lossy());
             let entry = DirEntry::from_metadata(meta, &name)?;
             entries.push(entry);
@@ -412,7 +386,7 @@ impl RequestHandler {
         Ok(entries)
     }
     // TODO return ref instead of owned PathBuf
-    async fn parse_req_path(req_path: &str) -> Result<String> {
+    fn parse_req_path(req_path: &str) -> Result<String> {
         let mut req_path = req_path;
         if let Some((l, _)) = req_path.split_once('?') {
             req_path = l;

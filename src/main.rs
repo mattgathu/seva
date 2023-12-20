@@ -1,24 +1,7 @@
-#![allow(dead_code)]
-#![allow(unused_imports)]
-
-use anyhow::{anyhow, Context, Error, Result};
-use bytes::Bytes;
+use anyhow::Result;
 use clap::Parser;
-use handlebars::Handlebars;
-use serde::Serialize;
-use std::{
-    env, fmt,
-    future::Future,
-    marker::PhantomData,
-    net::SocketAddr,
-    path::PathBuf,
-    pin::Pin,
-    rc::Rc,
-    sync::Arc,
-    time::{Duration, SystemTime},
-};
-use tokio::net::{TcpListener, TcpStream};
-use tracing::{debug, info, Level};
+use std::{env, path::PathBuf};
+use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
 mod fs;
@@ -57,59 +40,7 @@ fn home_dir() -> Option<PathBuf> {
     std::env::home_dir()
 }
 
-struct ServerConfig {
-    keep_alive: usize,
-    max_connections: usize,
-    request_timeout: Duration,
-}
-#[derive(Debug, Clone)]
-struct RequestContext {
-    dir: Arc<PathBuf>,
-}
-
-struct DirServer {
-    // todo
-    // workers
-    // configuration
-    listener: TcpListener,
-    dir: Arc<PathBuf>,
-}
-impl DirServer {
-    async fn new(host: String, port: u16, dir: PathBuf) -> Result<DirServer> {
-        let listener = TcpListener::bind((host, port)).await?;
-        Ok(DirServer {
-            listener,
-            dir: Arc::new(dir),
-        })
-    }
-
-    async fn run(&mut self) {
-        loop {
-            if let Ok((sock, peer_addr)) = self.listener.accept().await {
-                // spawn handler
-                info!("received connection from {peer_addr}");
-                let ctxt = RequestContext {
-                    dir: self.dir.clone(),
-                };
-                tokio::spawn(async move {
-                    Self::handle_stream(sock, peer_addr, ctxt).await
-                });
-            }
-        }
-    }
-
-    async fn handle_stream(
-        socket: TcpStream,
-        peer_addr: SocketAddr,
-        ctxt: RequestContext,
-    ) -> Result<()> {
-        info!("handling stream from: {peer_addr} {socket:?} {ctxt:?}");
-        Ok(())
-    }
-}
-
-#[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<()> {
+fn main() -> Result<()> {
     let args = Args::parse();
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
@@ -132,9 +63,7 @@ async fn main() -> Result<()> {
         port = args.port,
     );
 
-    //let mut server = DirServer::new(args.host, args.port, dir).await?;
-    //server.run().await;
-    let mut server = server::HttpServer::new(args.host, args.port, dir).await?;
-    server.run().await?;
+    let mut server = server::HttpServer::new(args.host, args.port, dir)?;
+    server.run()?;
     Ok(())
 }
