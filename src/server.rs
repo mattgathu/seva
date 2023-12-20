@@ -164,7 +164,11 @@ impl RequestHandler {
                 EntryType::File => self.send_file(&req, &entry)?,
                 EntryType::Link => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
-                    self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)?
+                    if req_path.ends_with('/') {
+                        self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)?
+                    } else {
+                        self.redirect(&req, &format!("/{}/", req_path))?
+                    }
                 }
                 EntryType::Other => {
                     //TODO
@@ -172,12 +176,12 @@ impl RequestHandler {
             }
         } else {
             // return 404
-            let resp = Response {
-                protocol: self.protocol.clone(),
-                status: StatusCode::NotFound,
-                headers: vec![],
-                body: None,
-            };
+            let resp = Response::new(
+                self.protocol.clone(),
+                StatusCode::NotFound,
+                vec![],
+                None,
+            );
             self.send_response(resp, &req)?;
         }
         self.stream.shutdown(Shutdown::Both).ok();
@@ -186,23 +190,27 @@ impl RequestHandler {
     fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
         debug!("serving dir: {}", path.display());
         let hb = Handlebars::new();
+        let path_display = if path.is_absolute() {
+            "/".to_string()
+        } else {
+            format!("/{}", path.display())
+        };
 
         let dir_entries = Self::build_dir_entries(path)?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
-        let index = hb.render_template(DIR_TEMPLATE, &data)?;
+        let index = hb.render_template(
+            &DIR_TEMPLATE.replace("rep_with_path", &path_display),
+            &data,
+        )?;
         let body = if req.method == HttpMethod::Head {
             None
         } else {
             Some(Bytes::from(index))
         };
 
-        let resp = Response {
-            protocol: self.protocol.clone(),
-            status: StatusCode::Ok,
-            headers: vec![],
-            body,
-        };
+        let resp =
+            Response::new(self.protocol.clone(), StatusCode::Ok, vec![], body);
 
         self.send_response(resp, req)?;
 
@@ -227,6 +235,19 @@ impl RequestHandler {
         Ok(())
     }
 
+    fn redirect(&mut self, req: &Request, location: &str) -> Result<()> {
+        let hdr = Header::new("Location", location);
+        let resp = Response::new(
+            self.protocol.clone(),
+            StatusCode::MovedPermanently,
+            vec![hdr],
+            None,
+        );
+        self.send_response(resp, req)?;
+
+        Ok(())
+    }
+
     fn get_mime_type(&self, ext: Option<&String>) -> MimeType {
         debug!("mime type lookup for: {ext:?}");
         ext.and_then(|e| MimeType::from_ext(e.to_string()))
@@ -243,7 +264,9 @@ impl RequestHandler {
     }
 
     fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
+        debug!("path lookup: {path}");
         let fpath = self.dir.join(path);
+        debug!("path lookup fpath: {fpath:?}");
         match metadata(fpath) {
             Ok(meta) => Ok(Some(DirEntry::from_metadata(meta, path)?)),
             Err(e) => {
@@ -300,6 +323,7 @@ impl RequestHandler {
         self.send_hdr(&Header::new("Server", "seva/0.1.0"))?;
         self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))?;
         self.send_hdr(&Header::new("Connection", "close"))?;
+        self.send_headers(&r.headers)?;
         self.end_headers()?;
         let bytes_sent = if let Some(body) = r.body {
             self.send_body(body)?
@@ -394,7 +418,15 @@ impl RequestHandler {
         if let Some((l, _)) = req_path.split_once('#') {
             req_path = l;
         }
-        let path: String = req_path.split('/').filter(|p| !p.is_empty()).collect();
+        let ends_with_slash = req_path.ends_with('/');
+        let mut path: String = req_path
+            .split('/')
+            .filter(|p| !p.is_empty())
+            .collect::<Vec<_>>()
+            .join("/");
+        if ends_with_slash {
+            path.push('/');
+        }
 
         Ok(path)
     }
@@ -406,7 +438,7 @@ const DIR_TEMPLATE: &str = r#"
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width">
-<title>Directory Listing for {{path}}</title>
+<title>Directory Listing</title>
 <style>
 html {
   font-family: sans-serif;
@@ -414,7 +446,7 @@ html {
 </style>
 </head>
 <body>
-<h1>Directory Listing for {{path}}</h1>
+<h1>Directory Listing for rep_with_path</h1>
 <hr>
 <ul>
 {{#each entries as |e| }}

@@ -61,6 +61,21 @@ pub struct Response {
     pub headers: Vec<Header>,
     pub body: Option<Bytes>,
 }
+impl Response {
+    pub fn new(
+        protocol: String,
+        status: StatusCode,
+        headers: Vec<Header>,
+        body: Option<Bytes>,
+    ) -> Response {
+        Self {
+            protocol,
+            status,
+            headers,
+            body,
+        }
+    }
+}
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Body {
     // todo
@@ -177,6 +192,7 @@ impl Display for HttpMethod {
         f.write_str(&String::from(*self))
     }
 }
+//TODO: turn into enum
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Header {
     pub name: String,
@@ -232,6 +248,10 @@ pub enum StatusCode {
     /// cached version of the response.
     #[code(206)]
     NotModified,
+    /// This redirect status response code indicates that the requested resource
+    /// has been definitively moved to the URL given by the Location headers.
+    #[code(301)]
+    MovedPermanently,
     // Client Errors
     /// The server cannot or will not process the request due to something that
     /// is perceived to be a client error.

@@ -24,7 +24,7 @@ impl DirEntry {
     pub fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {
         let ext = name.rsplit_once('.').map(|(_, e)| e.to_string());
         let file_type = EntryType::from(meta.file_type());
-        let name = if file_type == EntryType::Dir {
+        let name = if file_type == EntryType::Dir && !name.ends_with('/') {
             format!("{}/", name)
         } else {
             name.to_string()
