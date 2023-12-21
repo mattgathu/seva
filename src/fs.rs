@@ -1,4 +1,4 @@
-use anyhow::Result;
+use crate::errors::{ParsingError, Result};
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use std::{fs::Metadata, time::SystemTime};
@@ -18,7 +18,7 @@ impl DirEntry {
         let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0);
         match dt {
             Some(dt) => Ok(dt),
-            None => Err(anyhow::format_err!("date conversion failed")),
+            None => Err(ParsingError::DateTime("date conversion failed".to_owned()).into()),
         }
     }
     pub fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {

@@ -1,11 +1,13 @@
 #![deny(unused)]
-use anyhow::Result;
+use crate::errors::Result;
 use bytes::Bytes;
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
 use seva_macros::{HttpStatusCode, MimeType};
 use std::fmt::Display;
+
+use crate::errors::{ParsingError, SevaError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request {
@@ -19,7 +21,8 @@ pub struct Request {
 
 impl Request {
     pub fn parse(req_str: &str) -> Result<Request> {
-        let mut res = HttpRequestParser::parse(Rule::request, req_str)?;
+        let mut res = HttpRequestParser::parse(Rule::request, req_str)
+            .map_err(|e| ParsingError::PestRuleError(format!("{e:?}")))?;
         let req_rule = res.next().unwrap();
         Request::try_from(req_rule)
     }
@@ -39,7 +42,7 @@ impl Request {
 }
 impl<'i> TryFrom<Pair<'i, Rule>> for Request {
     //TODO: use concrete error
-    type Error = anyhow::Error;
+    type Error = SevaError;
     fn try_from(
         pair: Pair<'i, Rule>,
     ) -> std::prelude::v1::Result<Self, Self::Error> {
@@ -121,46 +124,18 @@ pub enum HttpMethod {
     /// target resource.
     Trace,
 }
-#[derive(Debug, Clone)]
-pub enum HttpMethodParseError {
-    UnknownMethod(String),
-}
-impl Display for HttpMethodParseError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match &self {
-            HttpMethodParseError::UnknownMethod(val) => {
-                let s = format!("HttpMethodParseError::UnknownMethod({})", val);
-                f.write_str(&s)
-            }
-        }
-    }
-}
 
 impl<'i> TryFrom<Pair<'i, Rule>> for HttpMethod {
-    type Error = HttpMethodParseError;
+    type Error = ParsingError;
     fn try_from(
         value: Pair<'i, Rule>,
     ) -> std::prelude::v1::Result<Self, Self::Error> {
-        match value.as_str() {
-            "CONNECT" => Ok(HttpMethod::Connect),
-            "DELETE" => Ok(HttpMethod::Delete),
-            "GET" => Ok(HttpMethod::Get),
-            "HEAD" => Ok(HttpMethod::Head),
-            "OPTIONS" => Ok(HttpMethod::Options),
-            "PATCH" => Ok(HttpMethod::Patch),
-            "POST" => Ok(HttpMethod::Post),
-            "PUT" => Ok(HttpMethod::Put),
-            "TRACE" => Ok(HttpMethod::Trace),
-            _ => Err(HttpMethodParseError::UnknownMethod(
-                value.as_str().to_string(),
-            )),
-        }
+        Self::try_from(value.as_str().as_bytes())
     }
 }
 
-impl std::error::Error for HttpMethodParseError {}
 impl TryFrom<&[u8]> for HttpMethod {
-    type Error = HttpMethodParseError;
+    type Error = ParsingError;
     fn try_from(value: &[u8]) -> std::prelude::v1::Result<Self, Self::Error> {
         match value {
             b"CONNECT" => Ok(HttpMethod::Connect),
@@ -172,7 +147,7 @@ impl TryFrom<&[u8]> for HttpMethod {
             b"POST" => Ok(HttpMethod::Post),
             b"PUT" => Ok(HttpMethod::Put),
             b"TRACE" => Ok(HttpMethod::Trace),
-            _ => Err(HttpMethodParseError::UnknownMethod(
+            _ => Err(ParsingError::UnknownMethod(
                 String::from_utf8(value.to_vec()).unwrap_or_default(),
             )),
         }

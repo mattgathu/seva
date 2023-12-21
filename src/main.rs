@@ -4,6 +4,7 @@ use std::{env, path::PathBuf};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
+mod errors;
 mod fs;
 mod http;
 mod server;

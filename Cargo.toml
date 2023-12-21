@@ -17,6 +17,7 @@ seva-macros = {path = "seva-macros"}
 pest = "2.7.5"
 pest_derive = "2.7.5"
 chrono = { version = "0.4.31", features = ["serde"] }
+thiserror = "1.0.51"
 
 [workspace]
 members = ["seva-macros"]
