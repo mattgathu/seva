@@ -38,16 +38,24 @@ impl Request {
     }
 }
 impl<'i> TryFrom<Pair<'i, Rule>> for Request {
+    //TODO: use concrete error
     type Error = anyhow::Error;
     fn try_from(
         pair: Pair<'i, Rule>,
     ) -> std::prelude::v1::Result<Self, Self::Error> {
         let mut iterator = pair.into_inner();
+        let method = iterator.next().unwrap().try_into()?;
+        let path = iterator.next().unwrap().as_str().to_string();
+        let version = iterator.next().unwrap().as_str().to_string();
+        let headers = match iterator.next() {
+            Some(rule) => Request::parse_headers(rule)?,
+            None => vec![],
+        };
         let req = Self {
-            method: iterator.next().unwrap().try_into()?,
-            path: iterator.next().unwrap().as_str().to_string(),
-            version: iterator.next().unwrap().as_str().to_string(),
-            headers: Request::parse_headers(iterator.next().unwrap())?, // TODO
+            method,
+            path,
+            version,
+            headers, // TODO
             time: Local::now(),
         };
 

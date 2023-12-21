@@ -1,32 +1,20 @@
-#![allow(unused)]
 use crate::{
     fs::{DirEntry, EntryType},
     http::{Header, HttpMethod, MimeType, Request, Response, StatusCode},
 };
 use anyhow::Result;
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use chrono::{DateTime, Local, Utc};
+use bytes::{BufMut, Bytes, BytesMut};
+use chrono::Local;
 use handlebars::Handlebars;
-use pest::{
-    iterators::{Pair, Pairs},
-    Parser as PestParser,
-};
-use pest_derive::Parser as PestDeriveParser;
-use serde::Serialize;
-use seva_macros::HttpStatusCode;
 use std::{
     collections::HashMap,
-    ffi::OsString,
-    fmt::{format, Display},
-    fs::{metadata, read_dir, File, Metadata},
-    io::{BufReader, BufWriter, ErrorKind, Read, Write},
+    fs::{metadata, read_dir, File},
+    io::{ErrorKind, Read, Write},
     net::{Shutdown, SocketAddr, TcpListener, TcpStream},
-    path::{Path, PathBuf},
+    path::PathBuf,
     str::FromStr,
-    sync::Arc,
-    time::SystemTime,
 };
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, info};
 
 const MAX_URI_LEN: usize = 65537;
 
@@ -51,8 +39,6 @@ const MAX_URI_LEN: usize = 65537;
 ///
 /// Ref: https://www.rfc-editor.org/rfc/rfc9110
 pub struct HttpServer {
-    host: String,
-    port: u16,
     dir: PathBuf,
     listener: TcpListener,
     shut_down: bool,
@@ -60,11 +46,10 @@ pub struct HttpServer {
 
 impl HttpServer {
     pub fn new(host: String, port: u16, dir: PathBuf) -> Result<HttpServer> {
+        debug!("binding to {host} on port: {port}");
         let listener = TcpListener::bind((host.clone(), port))?;
         let shut_down = false;
         Ok(Self {
-            host,
-            port,
             dir,
             listener,
             shut_down,
@@ -95,17 +80,13 @@ impl HttpServer {
             };
             if self.shut_down {
                 self.shut_down()?;
+                break;
             }
         }
         Ok(())
     }
-    fn handle_stream(&mut self, stream: TcpStream, addr: SocketAddr) -> Result<()> {
-        Ok(())
-    }
 
-    fn handle_timeout(&mut self) -> Result<()> {
-        todo!()
-    }
+    //fn handle_timeout(&mut self) -> Result<()> { todo!() }
 }
 
 struct RequestHandler {
@@ -143,21 +124,11 @@ impl RequestHandler {
         Ok(())
     }
 
-    fn map_dir(&mut self) -> Result<HashMap<String, DirEntry>> {
-        let map = Self::build_dir_entries(&self.dir)?
-            .into_iter()
-            .map(|e| (e.name.clone(), e))
-            .collect();
-
-        Ok(map)
-    }
-
     fn _handle(&mut self) -> Result<()> {
         let req = Request::parse(&self.read_request()?)?;
-        let dir_map = self.map_dir()?;
         let req_path = Self::parse_req_path(&req.path)?;
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
-            self.serve_dir(&req, &self.dir.clone())?;
+            self.serve_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
             // process entry
             match entry.file_type {
@@ -165,7 +136,11 @@ impl RequestHandler {
                 EntryType::Link => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
-                        self.serve_dir(&req, &PathBuf::from_str(&entry.name)?)?
+                        self.serve_dir(
+                            &req,
+                            &req_path,
+                            &PathBuf::from_str(&entry.name)?,
+                        )?
                     } else {
                         self.redirect(&req, &format!("/{}/", req_path))?
                     }
@@ -184,23 +159,22 @@ impl RequestHandler {
             );
             self.send_response(resp, &req)?;
         }
-        self.stream.shutdown(Shutdown::Both).ok();
         Ok(())
     }
-    fn serve_dir(&mut self, req: &Request, path: &PathBuf) -> Result<()> {
+    fn serve_dir(
+        &mut self,
+        req: &Request,
+        req_path: &str,
+        path: &PathBuf,
+    ) -> Result<()> {
         debug!("serving dir: {}", path.display());
         let hb = Handlebars::new();
-        let path_display = if path.is_absolute() {
-            "/".to_string()
-        } else {
-            format!("/{}", path.display())
-        };
 
         let dir_entries = Self::build_dir_entries(path)?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
         let index = hb.render_template(
-            &DIR_TEMPLATE.replace("rep_with_path", &path_display),
+            &DIR_TEMPLATE.replace("rep_with_path", req_path),
             &data,
         )?;
         let body = if req.method == HttpMethod::Head {
@@ -229,7 +203,6 @@ impl RequestHandler {
         if req.method != HttpMethod::Head {
             std::io::copy(&mut file, &mut self.stream)?;
         }
-        self.stream.shutdown(Shutdown::Both)?;
 
         self.log_response(req, StatusCode::Ok, entry.size as usize);
         Ok(())
@@ -330,13 +303,12 @@ impl RequestHandler {
         } else {
             0
         };
-        self.stream.shutdown(Shutdown::Both)?;
         self.log_response(req, r.status, bytes_sent);
 
         Ok(())
     }
 
-    fn send_body(&mut self, mut body: Bytes) -> Result<usize> {
+    fn send_body(&mut self, body: Bytes) -> Result<usize> {
         debug!("sending body");
         self.stream.write_all(&body)?;
         Ok(body.len())
@@ -390,16 +362,16 @@ impl RequestHandler {
         Ok(())
     }
 
+    #[allow(unused)]
     fn send_error(&mut self, code: StatusCode, reason: &str) -> Result<()> {
         error!("{code} - {reason}");
         self.send_resp_line(code)?;
-        self.stream.shutdown(Shutdown::Both)?;
         Ok(())
     }
 
     fn build_dir_entries(dir: &PathBuf) -> Result<Vec<DirEntry>> {
         let mut entries = vec![];
-        let mut dir_entries = read_dir(dir)?;
+        let dir_entries = read_dir(dir)?;
         for entry in dir_entries {
             let item = entry?;
             let meta = item.metadata()?;
@@ -411,6 +383,7 @@ impl RequestHandler {
     }
     // TODO return ref instead of owned PathBuf
     fn parse_req_path(req_path: &str) -> Result<String> {
+        debug!("parsing request path: {req_path:?}");
         let mut req_path = req_path;
         if let Some((l, _)) = req_path.split_once('?') {
             req_path = l;
@@ -419,16 +392,27 @@ impl RequestHandler {
             req_path = l;
         }
         let ends_with_slash = req_path.ends_with('/');
-        let mut path: String = req_path
-            .split('/')
-            .filter(|p| !p.is_empty())
-            .collect::<Vec<_>>()
-            .join("/");
+        let mut parts = vec![];
+        for frag in req_path.split('/') {
+            if frag.is_empty() {
+                continue;
+            } else if frag == ".." {
+                parts.pop();
+            } else {
+                parts.push(frag);
+            }
+        }
+        let mut path: String = parts.join("/");
         if ends_with_slash {
             path.push('/');
         }
 
         Ok(path)
+    }
+}
+impl Drop for RequestHandler {
+    fn drop(&mut self) {
+        self.stream.shutdown(Shutdown::Both).ok();
     }
 }
 
