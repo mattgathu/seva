@@ -10,16 +10,16 @@ use std::fmt::Display;
 use crate::errors::{ParsingError, SevaError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Request {
+pub struct Request<'a> {
     //TODO: use &str instead of String
     pub method: HttpMethod,
-    pub path: String,
+    pub path: &'a str,
     pub headers: Vec<Header>,
-    pub version: String,
+    pub version: &'a str,
     pub time: DateTime<Local>,
 }
 
-impl Request {
+impl<'a> Request<'a> {
     pub fn parse(req_str: &str) -> Result<Request> {
         let mut res = HttpRequestParser::parse(Rule::request, req_str)
             .map_err(|e| ParsingError::PestRuleError(format!("{e:?}")))?;
@@ -40,7 +40,7 @@ impl Request {
         Ok(headers)
     }
 }
-impl<'i> TryFrom<Pair<'i, Rule>> for Request {
+impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
     //TODO: use concrete error
     type Error = SevaError;
     fn try_from(
@@ -48,8 +48,8 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request {
     ) -> std::prelude::v1::Result<Self, Self::Error> {
         let mut iterator = pair.into_inner();
         let method = iterator.next().unwrap().try_into()?;
-        let path = iterator.next().unwrap().as_str().to_string();
-        let version = iterator.next().unwrap().as_str().to_string();
+        let path = iterator.next().unwrap().as_str();
+        let version = iterator.next().unwrap().as_str();
         let headers = match iterator.next() {
             Some(rule) => Request::parse_headers(rule)?,
             None => vec![],
@@ -554,7 +554,7 @@ mod tests {
         // Then
         let expected = Request {
             method: HttpMethod::Get,
-            path: String::from('/'),
+            path: "/",
             headers: vec![
                 Header {
                     name: "Accept-Language".to_string(),
@@ -565,7 +565,7 @@ mod tests {
                     value: "developer.mozilla.org".to_string(),
                 },
             ],
-            version: "1.1".to_string(),
+            version: "1.1",
             time: Local::now(),
         };
         assert_eq!(parsed.method, expected.method);

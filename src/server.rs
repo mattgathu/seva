@@ -133,8 +133,9 @@ impl RequestHandler {
     }
 
     fn _handle(&mut self) -> Result<()> {
-        let req = Request::parse(&self.read_request()?)?;
-        let req_path = Self::parse_req_path(&req.path)?;
+        let req_str = self.read_request()?;
+        let req = Request::parse(&req_str)?;
+        let req_path = Self::parse_req_path(req.path)?;
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
             self.serve_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
