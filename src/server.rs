@@ -10,9 +10,13 @@ use std::{
     collections::HashMap,
     fs::{metadata, read_dir, File},
     io::{ErrorKind, Read, Write},
-    net::{Shutdown, SocketAddr, TcpListener, TcpStream},
+    net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     str::FromStr,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
 };
 use tracing::{debug, error, info};
 
@@ -41,27 +45,29 @@ const MAX_URI_LEN: usize = 65537;
 pub struct HttpServer {
     dir: PathBuf,
     listener: TcpListener,
-    shut_down: bool,
+    shutdown: Arc<AtomicBool>,
 }
 
 impl HttpServer {
     pub fn new(host: String, port: u16, dir: PathBuf) -> Result<HttpServer> {
         debug!("binding to {host} on port: {port}");
         let listener = TcpListener::bind((host.clone(), port))?;
-        let shut_down = false;
+        listener.set_nonblocking(true)?;
+        let shutdown = Arc::new(AtomicBool::new(false));
+        let s = shutdown.clone();
+        ctrlc::set_handler(move || s.store(true, Ordering::SeqCst))?;
         Ok(Self {
             dir,
             listener,
-            shut_down,
+            shutdown,
         })
     }
     fn shut_down(&mut self) -> Result<()> {
-        //todo
+        info!("kwaheri!");
         Ok(())
     }
     pub fn run(&mut self) -> Result<()> {
         loop {
-            //TODO check for shutdown signal
             match self.listener.accept() {
                 Ok((stream, client_addr)) => {
                     let dir = self.dir.clone();
@@ -75,10 +81,12 @@ impl HttpServer {
                 }
                 Err(e) => {
                     // handle error
-                    error!("failed to accept new tcp connection. Reason: {e}");
+                    if e.kind() != ErrorKind::WouldBlock {
+                        error!("failed to accept new tcp connection. Reason: {e}");
+                    }
                 }
             };
-            if self.shut_down {
+            if self.shutdown.load(Ordering::SeqCst) {
                 self.shut_down()?;
                 break;
             }
@@ -409,11 +417,6 @@ impl RequestHandler {
         }
 
         Ok(path)
-    }
-}
-impl Drop for RequestHandler {
-    fn drop(&mut self) {
-        self.stream.shutdown(Shutdown::Both).ok();
     }
 }
 

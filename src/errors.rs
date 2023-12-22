@@ -19,6 +19,8 @@ pub enum SevaError {
     RenderError(#[from] handlebars::RenderError),
     #[error(transparent)]
     StringConversion(#[from] FromUtf8Error),
+    #[error(transparent)]
+    ShutdownError(#[from] ctrlc::Error),
 }
 #[derive(Error, Debug)]
 pub enum ParsingError {
