@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{io, time::SystemTimeError};
+use std::{io, string::FromUtf8Error, time::SystemTimeError};
 
 use thiserror::Error;
 
@@ -12,9 +12,13 @@ pub enum SevaError {
     #[error("request parsing failed")]
     ParsingError(#[from] ParsingError),
     #[error(transparent)]
-    Other(#[from] anyhow::Error),
-    #[error(transparent)]
     TimeError(#[from] SystemTimeError),
+    #[error("errors that can never happen")]
+    Infallible,
+    #[error(transparent)]
+    RenderError(#[from] handlebars::RenderError),
+    #[error(transparent)]
+    StringConversion(#[from] FromUtf8Error),
 }
 #[derive(Error, Debug)]
 pub enum ParsingError {

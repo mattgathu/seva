@@ -1,4 +1,3 @@
-use anyhow::Result;
 use clap::Parser;
 use std::{env, path::PathBuf};
 use tracing::{info, Level};
@@ -41,7 +40,7 @@ fn home_dir() -> Option<PathBuf> {
     std::env::home_dir()
 }
 
-fn main() -> Result<()> {
+fn main() -> errors::Result<()> {
     let args = Args::parse();
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)

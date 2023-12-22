@@ -18,7 +18,10 @@ impl DirEntry {
         let dt = DateTime::<Utc>::from_timestamp(secs as i64, 0);
         match dt {
             Some(dt) => Ok(dt),
-            None => Err(ParsingError::DateTime("date conversion failed".to_owned()).into()),
+            None => {
+                Err(ParsingError::DateTime("date conversion failed".to_owned())
+                    .into())
+            }
         }
     }
     pub fn from_metadata(meta: Metadata, name: &str) -> Result<Self> {

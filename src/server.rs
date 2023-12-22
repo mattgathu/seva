@@ -1,8 +1,8 @@
 use crate::{
+    errors::{Result, SevaError},
     fs::{DirEntry, EntryType},
     http::{Header, HttpMethod, MimeType, Request, Response, StatusCode},
 };
-use anyhow::Result;
 use bytes::{BufMut, Bytes, BytesMut};
 use chrono::Local;
 use handlebars::Handlebars;
@@ -139,7 +139,8 @@ impl RequestHandler {
                         self.serve_dir(
                             &req,
                             &req_path,
-                            &PathBuf::from_str(&entry.name)?,
+                            &PathBuf::from_str(&entry.name)
+                                .map_err(|_| SevaError::Infallible)?,
                         )?
                     } else {
                         self.redirect(&req, &format!("/{}/", req_path))?
@@ -246,7 +247,7 @@ impl RequestHandler {
                 if e.kind() == ErrorKind::NotFound {
                     Ok(None)
                 } else {
-                    Err(anyhow::anyhow!(e))
+                    Err(SevaError::Io(e))
                 }
             }
         }
