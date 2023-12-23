@@ -67,20 +67,17 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Response {
-    pub protocol: String,
     pub status: StatusCode,
     pub headers: Vec<Header>,
     pub body: Option<Bytes>,
 }
 impl Response {
     pub fn new(
-        protocol: String,
         status: StatusCode,
         headers: Vec<Header>,
         body: Option<Bytes>,
     ) -> Response {
         Self {
-            protocol,
             status,
             headers,
             body,

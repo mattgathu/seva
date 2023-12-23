@@ -157,12 +157,7 @@ impl RequestHandler {
             }
         } else {
             // return 404
-            let resp = Response::new(
-                self.protocol.clone(),
-                StatusCode::NotFound,
-                vec![],
-                None,
-            );
+            let resp = Response::new(StatusCode::NotFound, vec![], None);
             self.send_response(resp, &req)?;
         }
         Ok(())
@@ -189,8 +184,7 @@ impl RequestHandler {
             Some(Bytes::from(index))
         };
 
-        let resp =
-            Response::new(self.protocol.clone(), StatusCode::Ok, vec![], body);
+        let resp = Response::new(StatusCode::Ok, vec![], body);
 
         self.send_response(resp, req)?;
 
@@ -216,12 +210,7 @@ impl RequestHandler {
 
     fn redirect(&mut self, req: &Request, location: &str) -> Result<()> {
         let hdr = Header::new("Location", location);
-        let resp = Response::new(
-            self.protocol.clone(),
-            StatusCode::MovedPermanently,
-            vec![hdr],
-            None,
-        );
+        let resp = Response::new(StatusCode::MovedPermanently, vec![hdr], None);
         self.send_response(resp, req)?;
 
         Ok(())
