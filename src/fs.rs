@@ -48,18 +48,16 @@ pub enum EntryType {
     File,
     Link,
     Dir,
-    Other,
 }
 impl From<std::fs::FileType> for EntryType {
-    fn from(value: std::fs::FileType) -> Self {
-        if value.is_dir() {
+    fn from(val: std::fs::FileType) -> Self {
+        if val.is_dir() {
             Self::Dir
-        } else if value.is_file() {
+        } else if val.is_file() {
             Self::File
-        } else if value.is_symlink() {
-            Self::Link
         } else {
-            Self::Other
+            debug_assert!(val.is_symlink());
+            Self::Link
         }
     }
 }

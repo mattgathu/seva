@@ -139,7 +139,6 @@ impl RequestHandler {
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
             self.serve_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
-            // process entry
             match entry.file_type {
                 EntryType::File => self.send_file(&req, &entry)?,
                 EntryType::Link => self.send_file(&req, &entry)?,
@@ -154,9 +153,6 @@ impl RequestHandler {
                     } else {
                         self.redirect(&req, &format!("/{}/", req_path))?
                     }
-                }
-                EntryType::Other => {
-                    //TODO
                 }
             }
         } else {
