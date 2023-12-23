@@ -1,7 +1,9 @@
-use crate::errors::{ParsingError, Result};
+use std::{fs::Metadata, time::SystemTime};
+
 use chrono::{DateTime, Utc};
 use serde::Serialize;
-use std::{fs::Metadata, time::SystemTime};
+
+use crate::errors::{ParsingError, Result};
 
 #[derive(Debug, Serialize)]
 pub struct DirEntry {

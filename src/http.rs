@@ -1,13 +1,14 @@
 #![deny(unused)]
-use crate::errors::Result;
+use std::fmt::Display;
+
 use bytes::Bytes;
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
 use seva_macros::{HttpStatusCode, MimeType};
-use std::fmt::Display;
+use tracing::warn;
 
-use crate::errors::{ParsingError, SevaError};
+use crate::errors::{ParsingError, Result, SevaError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request<'a> {
@@ -31,9 +32,15 @@ impl<'a> Request<'a> {
         let mut headers = vec![];
         for hdr in pair.into_inner() {
             let mut hdr = hdr.into_inner();
-            let name = hdr.next().unwrap().as_str().to_string();
-            let value = hdr.next().unwrap().as_str().to_string();
-            headers.push(Header::new(name, value))
+            let hdr_name_opt = hdr.next().unwrap().as_str();
+            if let Some(name) =
+                HeaderName::from_str(hdr_name_opt.to_lowercase().as_str())
+            {
+                let value = hdr.next().unwrap().as_str().to_string();
+                headers.push(Header::new(name, value))
+            } else {
+                warn!("unknown header: {hdr_name_opt}")
+            }
         }
         headers.sort();
 
@@ -175,28 +182,16 @@ impl Display for HttpMethod {
 //TODO: turn into enum
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Header {
-    pub name: String,
+    pub name: HeaderName,
     pub value: String,
 }
 
 impl Header {
-    pub fn new(name: impl Into<String>, value: impl Into<String>) -> Self {
+    pub fn new(name: HeaderName, value: impl Into<String>) -> Self {
         Self {
-            name: name.into(),
+            name,
             value: value.into(),
         }
-    }
-}
-pub enum HeaderName {
-    ContentLength,
-}
-
-impl From<HeaderName> for String {
-    fn from(value: HeaderName) -> String {
-        let val = match value {
-            HeaderName::ContentLength => "content-length",
-        };
-        val.to_owned()
     }
 }
 
@@ -515,11 +510,12 @@ pub enum MimeType {
 impl From<MimeType> for Header {
     fn from(val: MimeType) -> Header {
         Header {
-            name: "Content-Type".to_string(),
+            name: HeaderName::ContentType,
             value: val.to_string(),
         }
     }
 }
+
 #[derive(PestDeriveParser)]
 #[grammar_inline = r#"
 request = { request_line ~ headers? ~ NEWLINE }
@@ -536,6 +532,121 @@ header_name = { (!(NEWLINE | ":") ~ ANY)+ }
 header_value = { (!NEWLINE ~ ANY)+ }
 "#]
 struct HttpRequestParser;
+
+macro_rules! header_names {
+    (
+        $(
+            $(#[$docs:meta])+
+            ($hname:ident, $name_str:literal);
+        )+
+    ) => {
+
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+        pub enum HeaderName {
+            $(
+                $(#[$docs])*
+                $hname,
+            )+
+        }
+        impl HeaderName {
+            pub fn as_str(&self) -> &str {
+                match *self {
+                    $(
+                        HeaderName::$hname => $name_str,
+                    )+
+                }
+            }
+
+            pub fn from_str(s: &str) -> Option<HeaderName> {
+                match s {
+                    $(
+                        $name_str => Some(HeaderName::$hname),
+                    )+
+                    _ => None
+                }
+            }
+        }
+        impl std::fmt::Display for HeaderName {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(self.as_str())
+            }
+        }
+
+    };
+}
+
+// inspired by the standard_headers! macro in the http crate
+header_names! {
+    /// Advertises which content types the client is able to understand.
+    (Accept, "accept");
+
+    /// Advertises which content encoding the client is able to understand.
+    (AcceptEncoding, "accept-encoding");
+
+    /// Advertises which languages the client is able to understand.
+    (AcceptLanguage, "accept-language");
+
+
+    /// Marker used by the server to advertise partial request support.
+    (AcceptRanges, "accept-ranges");
+
+    /// Lists the set of methods support by a resource.
+    (Allow, "allow");
+
+    /// Specifies directives for caching mechanisms in both requests and
+    /// responses.
+    (CacheControl, "cache-control");
+
+    /// Controls whether or not the network connection stays open after the
+    /// current transaction finishes.
+    (Connection, "connection");
+
+    /// Indicates if the content is expected to be displayed inline.
+    (ContentDisposition, "content-disposition");
+
+    /// Used to compress the media-type.
+    (ContentEncoding, "content-encoding");
+
+    /// Indicates the size of the entity-body.
+    (ContentLength, "content-length");
+
+    /// Used to indicate the media type of the resource.
+    (ContentType, "content-type");
+
+    /// Contains the date and time at which the message was originated.
+    (Date, "date");
+
+    /// Specifies the domain name of the server and (optionally) the TCP port
+    /// number on which the server is listening.
+    (Host, "host");
+
+    /// Makes a request conditional based on the modification date.
+    (IfModifiedSince, "if-modified-since");
+
+    /// Makes the request conditional based on the last modification date.
+    (IfUnmodifiedSince, "if-unmodified-since");
+
+    /// Content-Types that are acceptable for the response.
+    (LastModified, "last-modified");
+
+    /// Indicates the URL to redirect a page to.
+    (Location, "location");
+
+    /// Indicates the part of a document that the server should return.
+    (Range, "range");
+
+    /// Contains information about the software used by the origin server to
+    /// handle the request.
+    (Server, "server");
+
+    /// Contains a string that allows identifying the requesting client's
+    /// software.
+    (UserAgent, "user-agent");
+
+    /// General HTTP header contains information about possible problems with
+    /// the status of the message.
+    (Warning, "warning");
+}
 
 #[cfg(test)]
 mod tests {
@@ -554,11 +665,11 @@ mod tests {
             path: "/",
             headers: vec![
                 Header {
-                    name: "Accept-Language".to_string(),
+                    name: HeaderName::AcceptLanguage,
                     value: "fr".to_string(),
                 },
                 Header {
-                    name: "Host".to_string(),
+                    name: HeaderName::Host,
                     value: "developer.mozilla.org".to_string(),
                 },
             ],

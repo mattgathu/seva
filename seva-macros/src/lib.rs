@@ -1,8 +1,6 @@
 extern crate proc_macro;
 
-use proc_macro2::Literal;
-
-use proc_macro2::{TokenStream, TokenTree};
+use proc_macro2::{Literal, TokenStream, TokenTree};
 use quote::quote;
 use syn::{
     parse_macro_input, Attribute, Data, DataEnum, DeriveInput, Error, Generics,

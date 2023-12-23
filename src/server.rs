@@ -1,15 +1,7 @@
-use crate::{
-    errors::{Result, SevaError},
-    fs::{DirEntry, EntryType},
-    http::{Header, HttpMethod, MimeType, Request, Response, StatusCode},
-};
-use bytes::{BufMut, Bytes, BytesMut};
-use chrono::Local;
-use handlebars::Handlebars;
 use std::{
     collections::HashMap,
     fs::{metadata, read_dir, File},
-    io::{ErrorKind, Read, Write},
+    io::{self, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     str::FromStr,
@@ -18,7 +10,19 @@ use std::{
         Arc,
     },
 };
-use tracing::{debug, error, info};
+
+use bytes::{BufMut, Bytes, BytesMut};
+use chrono::Local;
+use handlebars::Handlebars;
+use tracing::{debug, error, info, trace};
+
+use crate::{
+    errors::{Result, SevaError},
+    fs::{DirEntry, EntryType},
+    http::{
+        Header, HeaderName, HttpMethod, MimeType, Request, Response, StatusCode,
+    },
+};
 
 const MAX_URI_LEN: usize = 65537;
 
@@ -110,7 +114,7 @@ impl RequestHandler {
         client_addr: SocketAddr,
         dir: PathBuf,
     ) -> RequestHandler {
-        let protocol = "HTTP/1.1".to_owned();
+        let protocol = "HTTP/1.0".to_owned();
 
         RequestHandler {
             stream,
@@ -133,6 +137,7 @@ impl RequestHandler {
     }
 
     fn _handle(&mut self) -> Result<()> {
+        debug!("handling stream");
         let req_str = self.read_request()?;
         let req = Request::parse(&req_str)?;
         let req_path = Self::parse_req_path(req.path)?;
@@ -178,6 +183,7 @@ impl RequestHandler {
             &DIR_TEMPLATE.replace("rep_with_path", req_path),
             &data,
         )?;
+
         let body = if req.method == HttpMethod::Head {
             None
         } else {
@@ -190,18 +196,20 @@ impl RequestHandler {
 
         Ok(())
     }
+
     fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
+        //TODO: use send response and avoid duplicated headers code
         let mut file = File::open(&entry.name)?;
         self.send_resp_line(StatusCode::Ok)?;
         let file_headers = self.get_file_headers(entry);
         self.send_headers(&file_headers)?;
-        self.send_hdr(&Header::new("Server", "seva/0.1.0"))?;
-        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))?;
-        self.send_hdr(&Header::new("Connection", "close"))?;
+        self.send_hdr(&Header::new(HeaderName::Server, "seva/0.1.0"))?;
+        self.send_hdr(&Header::new(HeaderName::Date, Local::now().to_rfc2822()))?;
+        self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
         self.end_headers()?;
 
         if req.method != HttpMethod::Head {
-            std::io::copy(&mut file, &mut self.stream)?;
+            io::copy(&mut file, &mut self.stream)?;
         }
 
         self.log_response(req, StatusCode::Ok, entry.size as usize);
@@ -209,7 +217,7 @@ impl RequestHandler {
     }
 
     fn redirect(&mut self, req: &Request, location: &str) -> Result<()> {
-        let hdr = Header::new("Location", location);
+        let hdr = Header::new(HeaderName::Location, location);
         let resp = Response::new(StatusCode::MovedPermanently, vec![hdr], None);
         self.send_response(resp, req)?;
 
@@ -226,8 +234,8 @@ impl RequestHandler {
         let mime_type = self.get_mime_type(entry.ext.as_ref());
         vec![
             mime_type.into(),
-            Header::new("Last-Modified", entry.modified.to_rfc2822()),
-            Header::new("Content-Length", format!("{}", entry.size)),
+            Header::new(HeaderName::LastModified, entry.modified.to_rfc2822()),
+            Header::new(HeaderName::ContentLength, format!("{}", entry.size)),
         ]
     }
 
@@ -248,12 +256,14 @@ impl RequestHandler {
     }
     //TODO: optimize to be zero-copy
     fn read_request(&mut self) -> Result<String> {
+        debug!("reading request");
         let mut lines = vec![];
         loop {
             let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
             self.read_line(&mut buf, MAX_URI_LEN)?;
             let s = String::from_utf8(buf.to_vec())?;
             let len = s.len();
+            trace!("req line: {s}");
             lines.push(s);
             if len == 1 {
                 break;
@@ -263,6 +273,7 @@ impl RequestHandler {
         for line in lines {
             res.push_str(&format!("{}\n", line))
         }
+        debug!("read request");
         Ok(res)
     }
 
@@ -274,7 +285,15 @@ impl RequestHandler {
                 break;
             } else {
                 let mut b = [0u8; 1];
-                self.stream.read_exact(&mut b)?;
+                //TODO: possible to get stuck infinitely
+                // fix by adding timeout
+                loop {
+                    match self.stream.read_exact(&mut b) {
+                        Ok(_) => break,
+                        Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
+                        Err(e) => return Err(SevaError::Io(e)),
+                    }
+                }
                 if b[0] as char == '\n' {
                     break;
                 } else {
@@ -288,9 +307,9 @@ impl RequestHandler {
     fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
         debug!("sending response");
         self.send_resp_line(r.status)?;
-        self.send_hdr(&Header::new("Server", "seva/0.1.0"))?;
-        self.send_hdr(&Header::new("Date", Local::now().to_rfc2822()))?;
-        self.send_hdr(&Header::new("Connection", "close"))?;
+        self.send_hdr(&Header::new(HeaderName::Server, "seva/0.1.0"))?;
+        self.send_hdr(&Header::new(HeaderName::Date, Local::now().to_rfc2822()))?;
+        self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
         self.send_headers(&r.headers)?;
         self.end_headers()?;
         let bytes_sent = if let Some(body) = r.body {

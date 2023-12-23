@@ -1,5 +1,6 @@
-use clap::Parser;
 use std::{env, path::PathBuf};
+
+use clap::Parser;
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
