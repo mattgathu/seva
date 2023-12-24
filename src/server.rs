@@ -143,13 +143,13 @@ impl RequestHandler {
         let req = Request::parse(&req_str)?;
         let req_path = Self::parse_req_path(req.path)?;
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
-            self.serve_dir(&req, "/", &self.dir.clone())?;
+            self.send_index(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
             match entry.file_type {
                 EntryType::File => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
-                        self.serve_dir(
+                        self.send_index(
                             &req,
                             &req_path,
                             &PathBuf::from_str(&entry.name)
@@ -167,16 +167,16 @@ impl RequestHandler {
         }
         Ok(())
     }
-    fn serve_dir(
+    fn send_index(
         &mut self,
         req: &Request,
         req_path: &str,
-        path: &PathBuf,
+        dir: &PathBuf,
     ) -> Result<()> {
-        debug!("serving dir: {}", path.display());
+        debug!("serving dir: {}", dir.display());
         let hb = Handlebars::new();
 
-        let dir_entries = Self::build_dir_entries(path)?;
+        let dir_entries = Self::build_dir_entries(dir)?;
         let mut data = HashMap::new();
         data.insert("entries".to_string(), dir_entries);
         let index = hb.render_template(
