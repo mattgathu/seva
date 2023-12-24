@@ -96,13 +96,12 @@ where
     }
 }
 
-#[allow(unused)]
 pub struct ResponseBuilder<B> {
     status: StatusCode,
     headers: Vec<Header>,
     body: B,
 }
-#[allow(unused)]
+
 impl ResponseBuilder<Empty> {
     fn new(status: StatusCode, headers: Vec<Header>) -> ResponseBuilder<Empty> {
         Self {

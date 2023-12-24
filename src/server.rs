@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{metadata, read_dir, File},
-    io::{self, Cursor, ErrorKind, Read, Write},
+    io::{self, Cursor, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     str::FromStr,
@@ -13,11 +13,12 @@ use std::{
 
 use bytes::{BufMut, BytesMut};
 use chrono::Local;
+use clap::crate_version;
 use handlebars::Handlebars;
 use tracing::{debug, error, info, trace};
 
 use crate::{
-    errors::{Result, SevaError},
+    errors::{IoErrorUtils, Result, SevaError},
     fs::{DirEntry, EntryType},
     http::{
         Header, HeaderName, HttpMethod, MimeType, Request, Response,
@@ -86,7 +87,7 @@ impl HttpServer {
                 }
                 Err(e) => {
                     // handle error
-                    if e.kind() != ErrorKind::WouldBlock {
+                    if e.is_blocking() {
                         error!("failed to accept new tcp connection. Reason: {e}");
                     }
                 }
@@ -230,7 +231,7 @@ impl RequestHandler {
         match metadata(fpath) {
             Ok(meta) => Ok(Some(DirEntry::from_metadata(meta, path)?)),
             Err(e) => {
-                if e.kind() == ErrorKind::NotFound {
+                if e.is_not_found() {
                     Ok(None)
                 } else {
                     Err(SevaError::Io(e))
@@ -274,7 +275,7 @@ impl RequestHandler {
                 loop {
                     match self.stream.read_exact(&mut b) {
                         Ok(_) => break,
-                        Err(e) if e.kind() == ErrorKind::WouldBlock => continue,
+                        Err(e) if e.is_blocking() => continue,
                         Err(e) => return Err(SevaError::Io(e)),
                     }
                 }
@@ -295,7 +296,8 @@ impl RequestHandler {
     ) -> Result<()> {
         debug!("sending response");
         self.send_resp_line(r.status)?;
-        self.send_hdr(&Header::new(HeaderName::Server, "seva/0.1.0"))?;
+        let server = format!("seva/{}", crate_version!());
+        self.send_hdr(&Header::new(HeaderName::Server, server))?;
         self.send_hdr(&Header::new(HeaderName::Date, Local::now().to_rfc2822()))?;
         self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
         self.send_headers(&r.headers)?;

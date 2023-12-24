@@ -37,3 +37,22 @@ impl fmt::Display for ParsingError {
         f.write_str(&format!("{:?}", self))
     }
 }
+
+pub trait IoErrorUtils {
+    fn kind(&self) -> io::ErrorKind;
+    fn is_interrupted(&self) -> bool {
+        self.kind() == io::ErrorKind::Interrupted
+    }
+    fn is_blocking(&self) -> bool {
+        self.kind() == io::ErrorKind::WouldBlock
+    }
+    fn is_not_found(&self) -> bool {
+        self.kind() == io::ErrorKind::NotFound
+    }
+}
+
+impl IoErrorUtils for io::Error {
+    fn kind(&self) -> io::ErrorKind {
+        self.kind()
+    }
+}
