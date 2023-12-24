@@ -4,10 +4,10 @@ use std::{
     io::{self, Empty, Read},
 };
 
+use crate::mime::MimeType;
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
-use seva_macros::{HttpStatusCode, MimeType};
 use tracing::warn;
 
 use crate::errors::{ParsingError, Result, SevaError};
@@ -257,320 +257,6 @@ impl Header {
     }
 }
 
-/// HTTP response status codes indicate whether a specific HTTP request has been
-/// successfully completed
-///
-/// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
-#[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq, Copy, Default)]
-pub enum StatusCode {
-    // Informational
-    /// This code is sent in response to an Upgrade request header from the
-    /// client and indicates the protocol the server is switching to.
-    #[code(101)]
-    SwitchingProtocols,
-    // Success
-    /// The request succeeded.
-    #[default]
-    #[code(200)]
-    Ok,
-    /// There is no content to send for this request
-    #[code(204)]
-    NoContent,
-    /// This response code is used when the Range header is sent from the client
-    /// to request only part of a resource.
-    #[code(206)]
-    PartialContent,
-    // Redirection
-    /// This is used for caching purposes. It tells the client that the response
-    /// has not been modified, so the client can continue to use the same
-    /// cached version of the response.
-    #[code(206)]
-    NotModified,
-    /// This redirect status response code indicates that the requested resource
-    /// has been definitively moved to the URL given by the Location headers.
-    #[code(301)]
-    MovedPermanently,
-    // Client Errors
-    /// The server cannot or will not process the request due to something that
-    /// is perceived to be a client error.
-    #[code(400)]
-    BadRequest,
-    /// The client does not have access rights to the content; that is, it is
-    /// unauthorized, so the server is refusing to give the requested
-    /// resource.
-    #[code(403)]
-    Forbidden,
-    /// The server cannot find the requested resource
-    #[code(404)]
-    NotFound,
-    /// The request method is known by the server but is not supported by the
-    /// target resource.
-    #[code(405)]
-    MethodNotAllowed,
-    /// Request entity is larger than limits defined by server.
-    #[code(413)]
-    PayloadTooLarge,
-    /// The URI requested by the client is longer than the server is willing to
-    /// interpret.
-    #[code(414)]
-    UriTooLong,
-    /// This response is sent on an idle connection
-    #[code(408)]
-    RequestTimeout,
-    /// The user has sent too many requests in a given amount of time ("rate
-    /// limiting").
-    #[code(429)]
-    TooManyRequests,
-    // Server Errors
-    /// The server has encountered a situation it does not know how to handle.
-    #[code(500)]
-    InternalServerError,
-    /// The request method is not supported by the server and cannot be handled.
-    #[code(501)]
-    NotImplemented,
-    /// The HTTP version used in the request is not supported by the server.
-    #[code(505)]
-    HttpVersionNotSupported,
-    /// Further extensions to the request are required for the server to fulfill
-    /// it.
-    #[code(510)]
-    NotExtended,
-}
-
-#[derive(MimeType)]
-pub enum MimeType {
-    ///AAC audio
-    #[mime_type(audio/aac)]
-    Aac,
-    ///AbiWord document
-    #[mime_type(application/x-abiword)]
-    Abw,
-    ///Archive document (multiple files embedded)
-    #[mime_type(application/x-freearc)]
-    Arc,
-    ///AVIF image
-    #[mime_type(image/avif)]
-    Avif,
-    ///AVI: Audio Video Interleave
-    #[mime_type(video/x-msvideo)]
-    Avi,
-    ///Amazon Kindle eBook format
-    #[mime_type(application/vnd.amazon.ebook)]
-    Azw,
-    ///Any kind of binary data
-    #[mime_type(application/octet-stream)]
-    Bin,
-    ///Windows OS/2 Bitmap Graphics
-    #[mime_type(image/bmp)]
-    Bmp,
-    ///BZip archive
-    #[mime_type(application/x-bzip)]
-    Bz,
-    ///BZip2 archive
-    #[mime_type(application/x-bzip2)]
-    Bz2,
-    ///CD audio
-    #[mime_type(application/x-cdf)]
-    Cda,
-    ///C-Shell script
-    #[mime_type(application/x-csh)]
-    Csh,
-    ///Cascading Style Sheets (CSS)
-    #[mime_type(text/css)]
-    Css,
-    ///Comma-separated values (CSV)
-    #[mime_type(text/csv)]
-    Csv,
-    ///Microsoft Word
-    #[mime_type(application/msword)]
-    Doc,
-    ///Microsoft Word (OpenXML)
-    #[mime_type(application/vnd.openxmlformats-officedocument.wordprocessingml.document)]
-    Docx,
-    ///MS Embedded OpenType fonts
-    #[mime_type(application/vnd.ms-fontobject)]
-    Eot,
-    ///Electronic publication (EPUB)
-    #[mime_type(application/epub+zip)]
-    Epub,
-    ///GZip Compressed Archive
-    #[mime_type(application/gzip)]
-    Gz,
-    ///Graphics Interchange Format (GIF)
-    #[mime_type(image/gif)]
-    Gif,
-    ///HyperText Markup Language (HTML)
-    #[mime_type(text/html)]
-    Htm,
-    ///HyperText Markup Language (HTML)
-    #[mime_type(#[mime_type(text/html)])]
-    Html,
-    ///Icon format
-    #[mime_type(image/vnd.microsoft.icon)]
-    Ico,
-    ///iCalendar format
-    #[mime_type(text/calendar)]
-    Ics,
-    ///Java Archive (JAR)
-    #[mime_type(application/java-archive)]
-    Jar,
-    ///JPEG images
-    #[mime_type(image/jpeg)]
-    Jpeg,
-    ///JPEG images
-    #[mime_type(#[mime_type(image/jpeg)])]
-    Jpg,
-    ///JavaScript
-    #[mime_type(text/javascript)]
-    Js,
-    ///JSON format
-    #[mime_type(application/json)]
-    Json,
-    ///JSON-LD format
-    #[mime_type(application/ld+json)]
-    Jsonld,
-    ///Musical Instrument Digital Interface (MIDI)
-    #[mime_type(audio/midi,)]
-    Mid,
-    ///Musical Instrument Digital Interface (MIDI)
-    #[mime_type(#[mime_type(audio/midi,)])]
-    Midi,
-    ///JavaScript module
-    #[mime_type(text/javascript)]
-    Mjs,
-    ///MP3 audio
-    #[mime_type(audio/mpeg)]
-    Mp3,
-    ///MP4 video
-    #[mime_type(video/mp4)]
-    Mp4,
-    ///MPEG Video
-    #[mime_type(video/mpeg)]
-    Mpeg,
-    ///Apple Installer Package
-    #[mime_type(application/vnd.apple.installer+xml)]
-    Mpkg,
-    ///OpenDocument presentation document
-    #[mime_type(application/vnd.oasis.opendocument.presentation)]
-    Odp,
-    ///OpenDocument spreadsheet document
-    #[mime_type(application/vnd.oasis.opendocument.spreadsheet)]
-    Ods,
-    ///OpenDocument text document
-    #[mime_type(application/vnd.oasis.opendocument.text)]
-    Odt,
-    ///OGG audio
-    #[mime_type(audio/ogg)]
-    Oga,
-    ///OGG video
-    #[mime_type(video/ogg)]
-    Ogv,
-    ///OGG
-    #[mime_type(application/ogg)]
-    Ogx,
-    ///Opus audio
-    #[mime_type(audio/opus)]
-    Opus,
-    ///OpenType font
-    #[mime_type(font/otf)]
-    Otf,
-    ///Portable Network Graphics
-    #[mime_type(image/png)]
-    Png,
-    ///Adobe Portable Document Format (PDF)
-    #[mime_type(application/pdf)]
-    Pdf,
-    ///Hypertext Preprocessor (Personal Home Page)
-    #[mime_type(application/x-httpd-php)]
-    Php,
-    ///Microsoft PowerPoint
-    #[mime_type(application/vnd.ms-powerpoint)]
-    Ppt,
-    ///Microsoft PowerPoint (OpenXML)
-    #[mime_type(application/vnd.openxmlformats-officedocument.presentationml.presentation)]
-    Pptx,
-    ///RAR archive
-    #[mime_type(application/vnd.rar)]
-    Rar,
-    ///Rich Text Format (RTF)
-    #[mime_type(application/rtf)]
-    Rtf,
-    ///Bourne shell script
-    #[mime_type(application/x-sh)]
-    Sh,
-    ///Scalable Vector Graphics (SVG)
-    #[mime_type(image/svg+xml)]
-    Svg,
-    ///Tape Archive (TAR)
-    #[mime_type(application/x-tar)]
-    Tar,
-    ///Tagged Image File Format (TIFF)
-    #[mime_type(image/tiff)]
-    Tif,
-    ///Tagged Image File Format (TIFF)
-    #[mime_type(#[mime_type(image/tiff)])]
-    Tiff,
-    ///MPEG transport stream
-    #[mime_type(video/mp2t)]
-    Ts,
-    ///TrueType Font
-    #[mime_type(font/ttf)]
-    Ttf,
-    ///Text, (generally ASCII or ISO 8859-n)
-    #[mime_type(text/plain)]
-    Txt,
-    ///Microsoft Visio
-    #[mime_type(application/vnd.visio)]
-    Vsd,
-    ///Waveform Audio Format
-    #[mime_type(audio/wav)]
-    Wav,
-    ///WEBM audio
-    #[mime_type(audio/webm)]
-    Weba,
-    ///WEBM video
-    #[mime_type(video/webm)]
-    Webm,
-    ///WEBP image
-    #[mime_type(image/webp)]
-    Webp,
-    ///Web Open Font Format (WOFF)
-    #[mime_type(font/woff)]
-    Woff,
-    ///Web Open Font Format (WOFF)
-    #[mime_type(font/woff2)]
-    Woff2,
-    ///XHTML
-    #[mime_type(application/xhtml+xml)]
-    Xhtml,
-    ///Microsoft Excel
-    #[mime_type(application/vnd.ms-excel)]
-    Xls,
-    ///Microsoft Excel (OpenXML)
-    #[mime_type(application/vnd.openxmlformats-officedocument.spreadsheetml.sheet)]
-    Xlsx,
-    ///XML
-    #[mime_type(application/xml)]
-    Xml,
-    ///XUL
-    #[mime_type(application/vnd.mozilla.xul+xml)]
-    Xul,
-    ///ZIP archive
-    #[mime_type(application/zip)]
-    Zip,
-    ///3GPP audio/video container
-    #[mime_type(video/3gpp)]
-    #[mime_ext(3gp)]
-    _3gp,
-    ///3GPP2 audio/video container
-    #[mime_type(video/3gpp2)]
-    #[mime_ext(3g2)]
-    _3g2,
-    ///7-zip archive
-    #[mime_type(application/x-7z-compressed)]
-    #[mime_ext(7z)]
-    _7z,
-}
 impl From<MimeType> for Header {
     fn from(val: MimeType) -> Header {
         Header {
@@ -596,6 +282,114 @@ header_name = { (!(NEWLINE | ":") ~ ANY)+ }
 header_value = { (!NEWLINE ~ ANY)+ }
 "#]
 struct HttpRequestParser;
+
+macro_rules! status_codes {
+    (
+        $(
+            $(#[$docs:meta])+
+            ($name:ident, $code:literal);
+        )+
+    ) => {
+        /// HTTP response status codes indicate whether a specific HTTP request has been
+        /// successfully completed
+        ///
+        /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
+        #[allow(unused)]
+        pub enum StatusCode {
+             $(
+                $(#[$docs])*
+                $name,
+            )+
+        }
+
+        impl StatusCode {
+            pub fn as_u16(&self) -> u16 {
+
+                match *self {
+                    $(
+                        StatusCode::$name => $code,
+                    )+
+                }
+            }
+        }
+
+        impl std::fmt::Display for StatusCode {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.as_u16())
+            }
+        }
+
+    };
+}
+
+status_codes! {
+
+    /// This code is sent in response to an Upgrade request header from the
+    /// client and indicates the protocol the server is switching to.
+    (SwitchingProtocols,101);
+
+    /// The request succeeded.
+    (Ok, 200);
+
+    /// There is no content to send for this request
+    (NoContent,204);
+
+    /// This response code is used when the Range header is sent from the client
+    /// to request only part of a resource.
+    (PartialContent,206);
+
+    /// This redirect status response code indicates that the requested resource
+    /// has been definitively moved to the URL given by the Location headers.
+    (MovedPermanently,301);
+
+    /// This is used for caching purposes. It tells the client that the response
+    /// has not been modified, so the client can continue to use the same
+    /// cached version of the response.
+    (NotModified,304);
+
+    /// The server cannot or will not process the request due to something that
+    /// is perceived to be a client error.
+    (BadRequest,400);
+
+    /// The client does not have access rights to the content; that is, it is
+    /// unauthorized, so the server is refusing to give the requested
+    /// resource.
+    (Forbidden,403);
+
+    /// The server cannot find the requested resource
+    (NotFound,404);
+
+    /// The request method is known by the server but is not supported by the
+    /// target resource.
+    (MethodNotAllowed,405);
+
+    /// Request entity is larger than limits defined by server.
+    (PayloadTooLarge,413);
+
+    /// The URI requested by the client is longer than the server is willing to
+    /// interpret.
+    (UriTooLong, 414);
+
+    /// This response is sent on an idle connection
+    (RequestTimeout,408);
+
+    /// The user has sent too many requests in a given amount of time ("rate
+    /// limiting").
+    (TooManyRequests,429);
+
+    /// The server has encountered a situation it does not know how to handle.
+    (InternalServerError,500);
+
+    /// The request method is not supported by the server and cannot be handled.
+    (NotImplemented, 501);
+
+    /// The HTTP version used in the request is not supported by the server.
+    (HttpVersionNotSupported, 505);
+
+    /// Further extensions to the request are required for the server to fulfill it.
+    (NotExtended,510);
+}
 
 macro_rules! header_names {
     (

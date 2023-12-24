@@ -21,9 +21,10 @@ use crate::{
     errors::{IoErrorUtils, Result, SevaError},
     fs::{DirEntry, EntryType},
     http::{
-        Header, HeaderName, HttpMethod, MimeType, Request, Response,
-        ResponseBuilder, StatusCode,
+        Header, HeaderName, HttpMethod, Request, Response, ResponseBuilder,
+        StatusCode,
     },
+    mime::MimeType,
 };
 
 const MAX_URI_LEN: usize = 65537;
@@ -69,7 +70,7 @@ impl HttpServer {
         })
     }
     fn shut_down(&mut self) -> Result<()> {
-        info!("kwaheri!");
+        info!("kwaheri! 👋");
         Ok(())
     }
     pub fn run(&mut self) -> Result<()> {
@@ -211,7 +212,7 @@ impl RequestHandler {
 
     fn get_mime_type(&self, ext: Option<&String>) -> MimeType {
         debug!("mime type lookup for: {ext:?}");
-        ext.and_then(|e| MimeType::from_ext(e.to_string()))
+        ext.and_then(|e| MimeType::from_ext(e))
             .unwrap_or(MimeType::Bin)
     }
 
@@ -340,20 +341,20 @@ impl RequestHandler {
             version = req.version
         );
         info!(
-            "{client_addr} - - [{time}] \"{req_line}\" {status_code} {bytes}",
+            "{client_addr} - - [{time}] \"{req_line}\" {status} {bytes}",
             client_addr = self.client_addr,
             time = req.time.format("%d/%b/%Y:%H:%M:%S %z"),
             req_line = req_line,
-            status_code = u16::from(status),
+            status = status,
             bytes = bytes
         )
     }
 
     fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
         let resp_line = format!(
-            "{protocol} {status_code} {status_msg}\r\n",
+            "{protocol} {status} {status_msg}\r\n",
             protocol = self.protocol,
-            status_code = u16::from(status),
+            status = status,
             status_msg = status,
         )
         .into_bytes();

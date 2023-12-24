@@ -7,6 +7,7 @@ use tracing_subscriber::FmtSubscriber;
 mod errors;
 mod fs;
 mod http;
+mod mime;
 mod server;
 
 /// A directory http server.

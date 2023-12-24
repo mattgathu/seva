@@ -12,12 +12,9 @@ handlebars = "4.5.0"
 serde = { version = "1.0.193", features = ["derive"] }
 tracing = "0.1.40"
 tracing-subscriber = "0.3.18"
-seva-macros = {path = "seva-macros"}
 pest = "2.7.5"
 pest_derive = "2.7.5"
 chrono = { version = "0.4.31", features = ["serde"] }
 thiserror = "1.0.51"
 ctrlc = { version = "3.4.1", features = ["termination"] }
 
-[workspace]
-members = ["seva-macros"]
