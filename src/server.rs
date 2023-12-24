@@ -87,7 +87,7 @@ impl HttpServer {
                 }
                 Err(e) => {
                     // handle error
-                    if e.is_blocking() {
+                    if !e.is_blocking() {
                         error!("failed to accept new tcp connection. Reason: {e}");
                     }
                 }
