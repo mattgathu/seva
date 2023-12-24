@@ -48,18 +48,15 @@ impl DirEntry {
 #[derive(Debug, Serialize, PartialEq, Eq)]
 pub enum EntryType {
     File,
-    Link,
     Dir,
 }
 impl From<std::fs::FileType> for EntryType {
     fn from(val: std::fs::FileType) -> Self {
         if val.is_dir() {
             Self::Dir
-        } else if val.is_file() {
-            Self::File
         } else {
-            debug_assert!(val.is_symlink());
-            Self::Link
+            debug_assert!(val.is_symlink() || val.is_file());
+            Self::File
         }
     }
 }

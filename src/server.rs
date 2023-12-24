@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{metadata, read_dir, File},
-    io::{self, ErrorKind, Read, Write},
+    io::{self, Cursor, ErrorKind, Read, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     str::FromStr,
@@ -11,7 +11,7 @@ use std::{
     },
 };
 
-use bytes::{BufMut, Bytes, BytesMut};
+use bytes::{BufMut, BytesMut};
 use chrono::Local;
 use handlebars::Handlebars;
 use tracing::{debug, error, info, trace};
@@ -20,7 +20,8 @@ use crate::{
     errors::{Result, SevaError},
     fs::{DirEntry, EntryType},
     http::{
-        Header, HeaderName, HttpMethod, MimeType, Request, Response, StatusCode,
+        Header, HeaderName, HttpMethod, MimeType, Request, Response,
+        ResponseBuilder, StatusCode,
     },
 };
 
@@ -146,7 +147,6 @@ impl RequestHandler {
         } else if let Some(entry) = self.lookup_path(&req_path)? {
             match entry.file_type {
                 EntryType::File => self.send_file(&req, &entry)?,
-                EntryType::Link => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
                         self.serve_dir(
@@ -162,7 +162,7 @@ impl RequestHandler {
             }
         } else {
             // return 404
-            let resp = Response::new(StatusCode::NotFound, vec![], None);
+            let resp = ResponseBuilder::not_found().build();
             self.send_response(resp, &req)?;
         }
         Ok(())
@@ -184,43 +184,27 @@ impl RequestHandler {
             &data,
         )?;
 
-        let body = if req.method == HttpMethod::Head {
-            None
-        } else {
-            Some(Bytes::from(index))
-        };
-
-        let resp = Response::new(StatusCode::Ok, vec![], body);
-
+        let resp = ResponseBuilder::ok()
+            .body(Cursor::new(index.into_bytes()))
+            .build();
         self.send_response(resp, req)?;
 
         Ok(())
     }
 
     fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
-        //TODO: use send response and avoid duplicated headers code
-        let mut file = File::open(&entry.name)?;
-        self.send_resp_line(StatusCode::Ok)?;
-        let file_headers = self.get_file_headers(entry);
-        self.send_headers(&file_headers)?;
-        self.send_hdr(&Header::new(HeaderName::Server, "seva/0.1.0"))?;
-        self.send_hdr(&Header::new(HeaderName::Date, Local::now().to_rfc2822()))?;
-        self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
-        self.end_headers()?;
+        let resp = ResponseBuilder::ok()
+            .headers(self.get_file_headers(entry))
+            .body(File::open(&entry.name)?)
+            .build();
+        self.send_response(resp, req)?;
 
-        if req.method != HttpMethod::Head {
-            io::copy(&mut file, &mut self.stream)?;
-        }
-
-        self.log_response(req, StatusCode::Ok, entry.size as usize);
         Ok(())
     }
 
     fn redirect(&mut self, req: &Request, location: &str) -> Result<()> {
-        let hdr = Header::new(HeaderName::Location, location);
-        let resp = Response::new(StatusCode::MovedPermanently, vec![hdr], None);
+        let resp = ResponseBuilder::redirect(location).build();
         self.send_response(resp, req)?;
-
         Ok(())
     }
 
@@ -304,7 +288,11 @@ impl RequestHandler {
         }
         Ok(())
     }
-    fn send_response(&mut self, r: Response, req: &Request) -> Result<()> {
+    fn send_response<T: Read>(
+        &mut self,
+        mut r: Response<T>,
+        req: &Request,
+    ) -> Result<()> {
         debug!("sending response");
         self.send_resp_line(r.status)?;
         self.send_hdr(&Header::new(HeaderName::Server, "seva/0.1.0"))?;
@@ -312,20 +300,15 @@ impl RequestHandler {
         self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
         self.send_headers(&r.headers)?;
         self.end_headers()?;
-        let bytes_sent = if let Some(body) = r.body {
-            self.send_body(body)?
-        } else {
+        let bytes_sent = if req.method == HttpMethod::Head {
             0
+        } else {
+            debug!("sending body");
+            io::copy(&mut r.body, &mut self.stream)? as usize
         };
         self.log_response(req, r.status, bytes_sent);
 
         Ok(())
-    }
-
-    fn send_body(&mut self, body: Bytes) -> Result<usize> {
-        debug!("sending body");
-        self.stream.write_all(&body)?;
-        Ok(body.len())
     }
 
     fn send_headers(&mut self, headers: &[Header]) -> Result<()> {

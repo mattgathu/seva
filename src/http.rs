@@ -1,7 +1,9 @@
 #![deny(unused)]
-use std::fmt::Display;
+use std::{
+    fmt::Display,
+    io::{self, Empty, Read},
+};
 
-use bytes::Bytes;
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
@@ -73,17 +75,19 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
     }
 }
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Response {
+pub struct Response<B>
+where
+    B: Read,
+{
     pub status: StatusCode,
     pub headers: Vec<Header>,
-    pub body: Option<Bytes>,
+    pub body: B,
 }
-impl Response {
-    pub fn new(
-        status: StatusCode,
-        headers: Vec<Header>,
-        body: Option<Bytes>,
-    ) -> Response {
+impl<B> Response<B>
+where
+    B: Read,
+{
+    pub fn new(status: StatusCode, headers: Vec<Header>, body: B) -> Response<B> {
         Self {
             status,
             headers,
@@ -91,9 +95,68 @@ impl Response {
         }
     }
 }
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Body {
-    // todo
+
+#[allow(unused)]
+pub struct ResponseBuilder<B> {
+    status: StatusCode,
+    headers: Vec<Header>,
+    body: B,
+}
+#[allow(unused)]
+impl ResponseBuilder<Empty> {
+    fn new(status: StatusCode, headers: Vec<Header>) -> ResponseBuilder<Empty> {
+        Self {
+            status,
+            headers,
+            body: io::empty(),
+        }
+    }
+
+    pub fn ok() -> ResponseBuilder<Empty> {
+        Self::new(StatusCode::Ok, vec![])
+    }
+
+    pub fn not_found() -> ResponseBuilder<Empty> {
+        Self::new(StatusCode::NotFound, vec![])
+    }
+
+    pub fn redirect(location: &str) -> ResponseBuilder<Empty> {
+        Self::new(
+            StatusCode::MovedPermanently,
+            vec![Header::new(HeaderName::Location, location)],
+        )
+    }
+    pub fn body<B: Read>(&self, body: B) -> ResponseBuilder<B> {
+        ResponseBuilder {
+            status: self.status,
+            headers: self.headers.clone(),
+            body,
+        }
+    }
+}
+#[allow(unused)]
+impl<B> ResponseBuilder<B>
+where
+    B: Read,
+{
+    pub fn header(&mut self, hdr: Header) -> &mut Self {
+        self.headers.push(hdr);
+        self
+    }
+
+    pub fn headers(&mut self, hdrs: Vec<Header>) -> &mut Self {
+        self.headers.extend(hdrs);
+        self
+    }
+
+    pub fn status(&mut self, status: StatusCode) -> &mut Self {
+        self.status = status;
+        self
+    }
+
+    pub fn build(self) -> Response<B> {
+        Response::new(self.status, self.headers, self.body)
+    }
 }
 
 /// HTTP defines a set of request methods to indicate the desired action to be
@@ -199,7 +262,7 @@ impl Header {
 /// successfully completed
 ///
 /// Ref: https://developer.mozilla.org/en-US/docs/Web/HTTP/Status
-#[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq, Copy)]
+#[derive(HttpStatusCode, Debug, Clone, PartialEq, Eq, Copy, Default)]
 pub enum StatusCode {
     // Informational
     /// This code is sent in response to an Upgrade request header from the
@@ -208,6 +271,7 @@ pub enum StatusCode {
     SwitchingProtocols,
     // Success
     /// The request succeeded.
+    #[default]
     #[code(200)]
     Ok,
     /// There is no content to send for this request
@@ -273,6 +337,7 @@ pub enum StatusCode {
     #[code(510)]
     NotExtended,
 }
+
 #[derive(MimeType)]
 pub enum MimeType {
     ///AAC audio
