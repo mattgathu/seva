@@ -20,10 +20,7 @@ use tracing::{debug, error, info, trace};
 use crate::{
     errors::{IoErrorUtils, Result, SevaError},
     fs::{DirEntry, EntryType},
-    http::{
-        Header, HeaderName, HttpMethod, Request, Response, ResponseBuilder,
-        StatusCode,
-    },
+    http::{HeaderName, HttpMethod, Request, Response, ResponseBuilder, StatusCode},
     mime::MimeType,
 };
 
@@ -145,13 +142,13 @@ impl RequestHandler {
         let req = Request::parse(&req_str)?;
         let req_path = Self::parse_req_path(req.path)?;
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
-            self.send_index(&req, "/", &self.dir.clone())?;
+            self.send_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
             match entry.file_type {
                 EntryType::File => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
-                        self.send_index(
+                        self.send_dir(
                             &req,
                             &req_path,
                             &PathBuf::from_str(&entry.name)
@@ -169,7 +166,7 @@ impl RequestHandler {
         }
         Ok(())
     }
-    fn send_index(
+    fn send_dir(
         &mut self,
         req: &Request,
         req_path: &str,
@@ -185,6 +182,8 @@ impl RequestHandler {
             &DIR_TEMPLATE.replace("rep_with_path", req_path),
             &data,
         )?;
+
+        // data compression
 
         let resp = ResponseBuilder::ok()
             .body(Cursor::new(index.into_bytes()))
@@ -216,12 +215,12 @@ impl RequestHandler {
             .unwrap_or(MimeType::Bin)
     }
 
-    fn get_file_headers(&self, entry: &DirEntry) -> Vec<Header> {
+    fn get_file_headers(&self, entry: &DirEntry) -> Vec<(HeaderName, String)> {
         let mime_type = self.get_mime_type(entry.ext.as_ref());
         vec![
-            mime_type.into(),
-            Header::new(HeaderName::LastModified, entry.modified.to_rfc2822()),
-            Header::new(HeaderName::ContentLength, format!("{}", entry.size)),
+            (HeaderName::ContentType, mime_type.as_str().to_owned()),
+            (HeaderName::LastModified, entry.modified.to_rfc2822()),
+            (HeaderName::ContentLength, format!("{}", entry.size)),
         ]
     }
 
@@ -292,37 +291,40 @@ impl RequestHandler {
     }
     fn send_response<T: Read>(
         &mut self,
-        mut r: Response<T>,
-        req: &Request,
+        mut response: Response<T>,
+        request: &Request,
     ) -> Result<()> {
         debug!("sending response");
-        self.send_resp_line(r.status)?;
+        self.send_resp_line(response.status)?;
         let server = format!("seva/{}", crate_version!());
-        self.send_hdr(&Header::new(HeaderName::Server, server))?;
-        self.send_hdr(&Header::new(HeaderName::Date, Local::now().to_rfc2822()))?;
-        self.send_hdr(&Header::new(HeaderName::Connection, "close"))?;
-        self.send_headers(&r.headers)?;
+        self.send_hdr(HeaderName::Server, server)?;
+        self.send_hdr(HeaderName::Date, Local::now().to_rfc2822())?;
+        self.send_hdr(HeaderName::Connection, "close")?;
+        self.send_headers(response.headers)?;
         self.end_headers()?;
-        let bytes_sent = if req.method == HttpMethod::Head {
+        let bytes_sent = if request.method == HttpMethod::Head {
             0
         } else {
             debug!("sending body");
-            io::copy(&mut r.body, &mut self.stream)? as usize
+            io::copy(&mut response.body, &mut self.stream)? as usize
         };
-        self.log_response(req, r.status, bytes_sent);
+        self.log_response(request, response.status, bytes_sent);
 
         Ok(())
     }
 
-    fn send_headers(&mut self, headers: &[Header]) -> Result<()> {
-        for hdr in headers {
-            self.send_hdr(hdr)?;
+    fn send_headers(
+        &mut self,
+        headers: impl IntoIterator<Item = (HeaderName, impl Into<String>)>,
+    ) -> Result<()> {
+        for (name, val) in headers {
+            self.send_hdr(name, val)?;
         }
         Ok(())
     }
 
-    fn send_hdr(&mut self, hdr: &Header) -> Result<()> {
-        let h = format!("{}: {}\r\n", hdr.name, hdr.value);
+    fn send_hdr(&mut self, name: HeaderName, val: impl Into<String>) -> Result<()> {
+        let h = format!("{}: {}\r\n", name, val.into());
         self.stream.write_all(h.as_bytes())?;
         Ok(())
     }

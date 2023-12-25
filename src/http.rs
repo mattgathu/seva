@@ -1,10 +1,10 @@
 #![deny(unused)]
 use std::{
+    collections::BTreeMap,
     fmt::Display,
     io::{self, Empty, Read},
 };
 
-use crate::mime::MimeType;
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
@@ -17,7 +17,7 @@ pub struct Request<'a> {
     //TODO: use &str instead of String
     pub method: HttpMethod,
     pub path: &'a str,
-    pub headers: Vec<Header>,
+    pub headers: BTreeMap<HeaderName, String>,
     pub version: &'a str,
     pub time: DateTime<Local>,
 }
@@ -30,8 +30,8 @@ impl<'a> Request<'a> {
         Request::try_from(req_rule)
     }
 
-    fn parse_headers(pair: Pair<Rule>) -> Result<Vec<Header>> {
-        let mut headers = vec![];
+    fn parse_headers(pair: Pair<Rule>) -> Result<BTreeMap<HeaderName, String>> {
+        let mut headers = BTreeMap::new();
         for hdr in pair.into_inner() {
             let mut hdr = hdr.into_inner();
             let hdr_name_opt = hdr.next().unwrap().as_str();
@@ -39,12 +39,11 @@ impl<'a> Request<'a> {
                 HeaderName::from_str(hdr_name_opt.to_lowercase().as_str())
             {
                 let value = hdr.next().unwrap().as_str().to_string();
-                headers.push(Header::new(name, value))
+                headers.insert(name, value);
             } else {
                 warn!("unknown header: {hdr_name_opt}")
             }
         }
-        headers.sort();
 
         Ok(headers)
     }
@@ -61,7 +60,7 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
         let version = iterator.next().unwrap().as_str();
         let headers = match iterator.next() {
             Some(rule) => Request::parse_headers(rule)?,
-            None => vec![],
+            None => BTreeMap::new(),
         };
         let req = Self {
             method,
@@ -80,14 +79,18 @@ where
     B: Read,
 {
     pub status: StatusCode,
-    pub headers: Vec<Header>,
+    pub headers: BTreeMap<HeaderName, String>,
     pub body: B,
 }
 impl<B> Response<B>
 where
     B: Read,
 {
-    pub fn new(status: StatusCode, headers: Vec<Header>, body: B) -> Response<B> {
+    pub fn new(
+        status: StatusCode,
+        headers: BTreeMap<HeaderName, String>,
+        body: B,
+    ) -> Response<B> {
         Self {
             status,
             headers,
@@ -98,12 +101,15 @@ where
 
 pub struct ResponseBuilder<B> {
     status: StatusCode,
-    headers: Vec<Header>,
+    headers: BTreeMap<HeaderName, String>,
     body: B,
 }
 
 impl ResponseBuilder<Empty> {
-    fn new(status: StatusCode, headers: Vec<Header>) -> ResponseBuilder<Empty> {
+    fn new(
+        status: StatusCode,
+        headers: BTreeMap<HeaderName, String>,
+    ) -> ResponseBuilder<Empty> {
         Self {
             status,
             headers,
@@ -112,18 +118,17 @@ impl ResponseBuilder<Empty> {
     }
 
     pub fn ok() -> ResponseBuilder<Empty> {
-        Self::new(StatusCode::Ok, vec![])
+        Self::new(StatusCode::Ok, BTreeMap::new())
     }
 
     pub fn not_found() -> ResponseBuilder<Empty> {
-        Self::new(StatusCode::NotFound, vec![])
+        Self::new(StatusCode::NotFound, BTreeMap::new())
     }
 
     pub fn redirect(location: &str) -> ResponseBuilder<Empty> {
-        Self::new(
-            StatusCode::MovedPermanently,
-            vec![Header::new(HeaderName::Location, location)],
-        )
+        let mut headers = BTreeMap::new();
+        headers.insert(HeaderName::Location, location.to_owned());
+        Self::new(StatusCode::MovedPermanently, headers)
     }
     pub fn body<B: Read>(&self, body: B) -> ResponseBuilder<B> {
         ResponseBuilder {
@@ -138,12 +143,15 @@ impl<B> ResponseBuilder<B>
 where
     B: Read,
 {
-    pub fn header(&mut self, hdr: Header) -> &mut Self {
-        self.headers.push(hdr);
+    pub fn header(&mut self, name: HeaderName, val: &str) -> &mut Self {
+        self.headers.insert(name, val.to_owned());
         self
     }
 
-    pub fn headers(&mut self, hdrs: Vec<Header>) -> &mut Self {
+    pub fn headers(
+        &mut self,
+        hdrs: impl IntoIterator<Item = (HeaderName, String)>,
+    ) -> &mut Self {
         self.headers.extend(hdrs);
         self
     }
@@ -239,30 +247,6 @@ impl From<HttpMethod> for String {
 impl Display for HttpMethod {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(&String::from(*self))
-    }
-}
-//TODO: turn into enum
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct Header {
-    pub name: HeaderName,
-    pub value: String,
-}
-
-impl Header {
-    pub fn new(name: HeaderName, value: impl Into<String>) -> Self {
-        Self {
-            name,
-            value: value.into(),
-        }
-    }
-}
-
-impl From<MimeType> for Header {
-    fn from(val: MimeType) -> Header {
-        Header {
-            name: HeaderName::ContentType,
-            value: val.to_string(),
-        }
     }
 }
 
@@ -399,7 +383,7 @@ macro_rules! header_names {
         )+
     ) => {
 
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Copy)]
         pub enum HeaderName {
             $(
                 $(#[$docs])*
@@ -509,6 +493,7 @@ header_names! {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use maplit::btreemap;
 
     #[test]
     fn request_parsing() -> Result<()> {
@@ -521,16 +506,10 @@ mod tests {
         let expected = Request {
             method: HttpMethod::Get,
             path: "/",
-            headers: vec![
-                Header {
-                    name: HeaderName::AcceptLanguage,
-                    value: "fr".to_string(),
-                },
-                Header {
-                    name: HeaderName::Host,
-                    value: "developer.mozilla.org".to_string(),
-                },
-            ],
+            headers: btreemap! {
+                HeaderName::AcceptLanguage => "fr".to_string(),
+                HeaderName::Host => "developer.mozilla.org".to_string(),
+            },
             version: "1.1",
             time: Local::now(),
         };
