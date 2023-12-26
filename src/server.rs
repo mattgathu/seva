@@ -25,6 +25,7 @@ use crate::{
 };
 
 const MAX_URI_LEN: usize = 65537;
+const HTTP_PROTOCOL: &str = "HTTP/1.0";
 
 /// An HTTP "server" is a program that accepts connections in order to service
 /// HTTP requests by sending HTTP responses.
@@ -88,6 +89,7 @@ impl HttpServer {
                     if !e.is_blocking() {
                         error!("failed to accept new tcp connection. Reason: {e}");
                     }
+                    // TODO: return 500
                 }
             };
             if self.shutdown.load(Ordering::SeqCst) {
@@ -97,16 +99,12 @@ impl HttpServer {
         }
         Ok(())
     }
-
-    //fn handle_timeout(&mut self) -> Result<()> { todo!() }
 }
 
 struct RequestHandler {
     stream: TcpStream,
     client_addr: SocketAddr,
     dir: PathBuf,
-    //TODO: find better place
-    protocol: String,
 }
 impl RequestHandler {
     fn new(
@@ -114,23 +112,20 @@ impl RequestHandler {
         client_addr: SocketAddr,
         dir: PathBuf,
     ) -> RequestHandler {
-        let protocol = "HTTP/1.0".to_owned();
-
-        RequestHandler {
+        Self {
             stream,
             client_addr,
             dir,
-            protocol,
         }
     }
     fn handle(&mut self) -> Result<()> {
-        //todo
         match self._handle() {
             Ok(_) => {
-                // TODO
+                trace!("RequestHandler::handle OK");
             }
             Err(e) => {
                 error!("failed to handle request. reason: {e}");
+                return Err(e);
             }
         }
         Ok(())
@@ -148,6 +143,7 @@ impl RequestHandler {
                 EntryType::File => self.send_file(&req, &entry)?,
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
+                        trace!("RequestHandler::_handle send_dir");
                         self.send_dir(
                             &req,
                             &req_path,
@@ -155,24 +151,26 @@ impl RequestHandler {
                                 .map_err(|_| SevaError::Infallible)?,
                         )?
                     } else {
+                        trace!("RequestHandler::_handle redirect");
                         self.redirect(&req, &format!("/{}/", req_path))?
                     }
                 }
             }
         } else {
-            // return 404
+            trace!("RequestHandler::_handle not found");
             let resp = ResponseBuilder::not_found().build();
             self.send_response(resp, &req)?;
         }
         Ok(())
     }
+
     fn send_dir(
         &mut self,
         req: &Request,
         req_path: &str,
         dir: &PathBuf,
     ) -> Result<()> {
-        debug!("serving dir: {}", dir.display());
+        debug!("sending dir: {}", dir.display());
         let hb = Handlebars::new();
 
         let dir_entries = Self::build_dir_entries(dir)?;
@@ -183,7 +181,7 @@ impl RequestHandler {
             &data,
         )?;
 
-        // data compression
+        // TODO: data compression
 
         let resp = ResponseBuilder::ok()
             .body(Cursor::new(index.into_bytes()))
@@ -239,9 +237,9 @@ impl RequestHandler {
             }
         }
     }
-    //TODO: optimize to be zero-copy
+
     fn read_request(&mut self) -> Result<String> {
-        debug!("reading request");
+        trace!("RequestHandler::read_request");
         let mut lines = vec![];
         loop {
             let mut buf = BytesMut::with_capacity(MAX_URI_LEN);
@@ -258,7 +256,7 @@ impl RequestHandler {
         for line in lines {
             res.push_str(&format!("{}\n", line))
         }
-        debug!("read request");
+
         Ok(res)
     }
 
@@ -289,12 +287,13 @@ impl RequestHandler {
         }
         Ok(())
     }
+
     fn send_response<T: Read>(
         &mut self,
         mut response: Response<T>,
         request: &Request,
     ) -> Result<()> {
-        debug!("sending response");
+        trace!("RequestHandler::send_response");
         self.send_resp_line(response.status)?;
         let server = format!("seva/{}", crate_version!());
         self.send_hdr(HeaderName::Server, server)?;
@@ -302,12 +301,14 @@ impl RequestHandler {
         self.send_hdr(HeaderName::Connection, "close")?;
         self.send_headers(response.headers)?;
         self.end_headers()?;
+
         let bytes_sent = if request.method == HttpMethod::Head {
             0
         } else {
-            debug!("sending body");
+            trace!("RequestHandler::send_response body io::copy");
             io::copy(&mut response.body, &mut self.stream)? as usize
         };
+
         self.log_response(request, response.status, bytes_sent);
 
         Ok(())
@@ -328,10 +329,12 @@ impl RequestHandler {
         self.stream.write_all(h.as_bytes())?;
         Ok(())
     }
+
     fn end_headers(&mut self) -> Result<()> {
         self.stream.write_all(b"\r\n")?;
         Ok(())
     }
+
     /// Log the request using the common log format
     ///
     /// [Log formats for HTTP Server](https://www.ibm.com/docs/en/i/7.5?topic=logging-log-formats)
@@ -355,19 +358,12 @@ impl RequestHandler {
     fn send_resp_line(&mut self, status: StatusCode) -> Result<()> {
         let resp_line = format!(
             "{protocol} {status} {status_msg}\r\n",
-            protocol = self.protocol,
-            status = status,
+            protocol = HTTP_PROTOCOL,
+            status = status.as_u16(),
             status_msg = status,
         )
         .into_bytes();
         self.stream.write_all(&resp_line)?;
-        Ok(())
-    }
-
-    #[allow(unused)]
-    fn send_error(&mut self, code: StatusCode, reason: &str) -> Result<()> {
-        error!("{code} - {reason}");
-        self.send_resp_line(code)?;
         Ok(())
     }
 
@@ -383,7 +379,7 @@ impl RequestHandler {
         }
         Ok(entries)
     }
-    // TODO return ref instead of owned PathBuf
+
     fn parse_req_path(req_path: &str) -> Result<String> {
         debug!("parsing request path: {req_path:?}");
         let mut req_path = req_path;
