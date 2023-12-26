@@ -22,6 +22,7 @@ pub enum SevaError {
     #[error(transparent)]
     ShutdownError(#[from] ctrlc::Error),
 }
+
 #[derive(Error, Debug)]
 pub enum ParsingError {
     MissingMethod,

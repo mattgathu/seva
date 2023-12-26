@@ -1,4 +1,12 @@
-#![deny(unused)]
+#![deny(unused, missing_docs)]
+/*!
+A simple directory http server.
+
+Seva serves files from a directory, directly mapping
+the directory structure to HTTP requests.
+
+Inspired by Python's http.server
+*/
 use std::{env, path::PathBuf};
 
 use clap::Parser;
@@ -11,9 +19,12 @@ mod http;
 mod mime;
 mod server;
 
-/// A directory http server.
+/// A simple directory http server.
+///
 /// Seva serves files from a directory, directly mapping
 /// the directory structure to HTTP requests.
+///
+/// Inspired by Python's http.server
 #[derive(Parser, Debug)]
 #[command(author, version, about, long_about = None)]
 struct Args {

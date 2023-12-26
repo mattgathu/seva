@@ -5,6 +5,7 @@ use std::{
 };
 
 use chrono::{DateTime, Local};
+use contracts::*;
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
 use tracing::{trace, warn};
@@ -36,9 +37,7 @@ impl<'a> Request<'a> {
         for hdr in pair.into_inner() {
             let mut hdr = hdr.into_inner();
             let hdr_name_opt = hdr.next().unwrap().as_str();
-            if let Some(name) =
-                HeaderName::from_str(hdr_name_opt.to_lowercase().as_str())
-            {
+            if let Some(name) = HeaderName::from_str(hdr_name_opt) {
                 let value = hdr.next().unwrap().as_str();
                 headers.insert(name, value);
             } else {
@@ -99,6 +98,7 @@ where
     }
 }
 
+#[derive(Debug, PartialEq)]
 pub struct ResponseBuilder<B> {
     status: StatusCode,
     headers: BTreeMap<HeaderName, String>,
@@ -125,11 +125,13 @@ impl ResponseBuilder<Empty> {
         Self::new(StatusCode::NotFound, BTreeMap::new())
     }
 
+    #[debug_ensures(ret.headers.len() == 1)]
     pub fn redirect(location: &str) -> ResponseBuilder<Empty> {
         let mut headers = BTreeMap::new();
         headers.insert(HeaderName::Location, location.to_owned());
         Self::new(StatusCode::MovedPermanently, headers)
     }
+
     pub fn body<B: Read>(&self, body: B) -> ResponseBuilder<B> {
         ResponseBuilder {
             status: self.status,
@@ -410,7 +412,7 @@ macro_rules! header_names {
             }
 
             pub fn from_str(s: &str) -> Option<HeaderName> {
-                match s {
+                match s.to_lowercase().as_str().trim() {
                     $(
                         $name_str => Some(HeaderName::$hname),
                     )+
@@ -502,6 +504,8 @@ header_names! {
 
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
     use maplit::btreemap;
 
@@ -534,7 +538,20 @@ mod tests {
     fn accept_encoding_parser() -> Result<()> {
         let val = "compress;q=0.5, gzip";
         let res = HttpParser::parse(Rule::accept_encoding, val);
-        println!("{res:#?}");
+        assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn response_body_type_mapping() -> Result<()> {
+        let builder = ResponseBuilder::ok();
+        let builder = builder.body(Cursor::new(vec![]));
+        let expected = ResponseBuilder {
+            status: StatusCode::Ok,
+            headers: BTreeMap::new(),
+            body: Cursor::new(vec![]),
+        };
+        assert_eq!(builder, expected);
         Ok(())
     }
 }

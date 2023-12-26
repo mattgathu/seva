@@ -203,3 +203,45 @@ mime_types! {
     ///7-zip archive
     (_7Z,"application/x-7z-compressed");
 }
+
+#[cfg(test)]
+mod tests {
+
+    use super::*;
+    use crate::errors::Result;
+
+    #[test]
+    fn check_mime_ext_parsing() -> Result<()> {
+        //Given
+        let ext = "zip";
+        // When
+        let mime = MimeType::from_ext(ext);
+        // Then
+        assert_eq!(mime, Some(MimeType::Zip));
+
+        Ok(())
+    }
+
+    #[test]
+    fn check_mime_str() -> Result<()> {
+        // Given
+        let mime = MimeType::Aac;
+        // When
+        let mime_str = mime.as_str();
+        // Then
+        assert_eq!(mime_str, "audio/aac");
+        Ok(())
+    }
+
+    #[test]
+    fn check_mime_display() -> Result<()> {
+        // Given
+        let css = MimeType::Css;
+        // When
+        let disp = format!("{}", css);
+        // Then
+        assert_eq!(&disp, "text/css");
+
+        Ok(())
+    }
+}
