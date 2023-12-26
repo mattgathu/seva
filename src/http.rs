@@ -1,4 +1,3 @@
-#![deny(unused)]
 use std::{
     collections::BTreeMap,
     fmt::Display,
@@ -8,29 +7,31 @@ use std::{
 use chrono::{DateTime, Local};
 use pest::{iterators::Pair, Parser as PestParser};
 use pest_derive::Parser as PestDeriveParser;
-use tracing::warn;
+use tracing::{trace, warn};
 
 use crate::errors::{ParsingError, Result, SevaError};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Request<'a> {
-    //TODO: use &str instead of String
     pub method: HttpMethod,
     pub path: &'a str,
-    pub headers: BTreeMap<HeaderName, String>,
+    //TODO: support repeated headers
+    pub headers: BTreeMap<HeaderName, &'a str>,
     pub version: &'a str,
     pub time: DateTime<Local>,
 }
 
 impl<'a> Request<'a> {
     pub fn parse(req_str: &str) -> Result<Request> {
-        let mut res = HttpRequestParser::parse(Rule::request, req_str)
+        trace!("Request::parse");
+        let mut res = HttpParser::parse(Rule::request, req_str)
             .map_err(|e| ParsingError::PestRuleError(format!("{e:?}")))?;
         let req_rule = res.next().unwrap();
         Request::try_from(req_rule)
     }
 
-    fn parse_headers(pair: Pair<Rule>) -> Result<BTreeMap<HeaderName, String>> {
+    fn parse_headers(pair: Pair<'a, Rule>) -> Result<BTreeMap<HeaderName, &'a str>> {
+        trace!("Request::parse_headers");
         let mut headers = BTreeMap::new();
         for hdr in pair.into_inner() {
             let mut hdr = hdr.into_inner();
@@ -38,10 +39,10 @@ impl<'a> Request<'a> {
             if let Some(name) =
                 HeaderName::from_str(hdr_name_opt.to_lowercase().as_str())
             {
-                let value = hdr.next().unwrap().as_str().to_string();
+                let value = hdr.next().unwrap().as_str();
                 headers.insert(name, value);
             } else {
-                warn!("unknown header: {hdr_name_opt}")
+                warn!("ignored unknown header: {hdr_name_opt}")
             }
         }
 
@@ -49,7 +50,6 @@ impl<'a> Request<'a> {
     }
 }
 impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
-    //TODO: use concrete error
     type Error = SevaError;
     fn try_from(
         pair: Pair<'i, Rule>,
@@ -66,7 +66,7 @@ impl<'i> TryFrom<Pair<'i, Rule>> for Request<'i> {
             method,
             path,
             version,
-            headers, // TODO
+            headers,
             time: Local::now(),
         };
 
@@ -138,11 +138,12 @@ impl ResponseBuilder<Empty> {
         }
     }
 }
-#[allow(unused)]
+
 impl<B> ResponseBuilder<B>
 where
     B: Read,
 {
+    #[allow(unused)]
     pub fn header(&mut self, name: HeaderName, val: &str) -> &mut Self {
         self.headers.insert(name, val.to_owned());
         self
@@ -156,6 +157,7 @@ where
         self
     }
 
+    #[allow(unused)]
     pub fn status(&mut self, status: StatusCode) -> &mut Self {
         self.status = status;
         self
@@ -264,8 +266,16 @@ headers = { header+ }
 header = { header_name ~ ":" ~ whitespace ~ header_value ~ NEWLINE }
 header_name = { (!(NEWLINE | ":") ~ ANY)+ }
 header_value = { (!NEWLINE ~ ANY)+ }
+
+
+ws = _{( " " | "\t")*}
+accept_encoding = { encoding ~ ws ~ ("," ~ ws ~ encoding)* ~ EOI}
+algo = {(ASCII_ALPHA+ | "identity" | "*")}
+weight = {ws ~ ";" ~ ws ~ "q=" ~ qvalue}
+qvalue = { ("0" ~ ("." ~ ASCII_DIGIT{,3}){,1}) | ("1" ~ ("." ~ "0"{,3}){,1}) }
+encoding = { algo ~ weight*}
 "#]
-struct HttpRequestParser;
+struct HttpParser;
 
 macro_rules! status_codes {
     (
@@ -507,8 +517,8 @@ mod tests {
             method: HttpMethod::Get,
             path: "/",
             headers: btreemap! {
-                HeaderName::AcceptLanguage => "fr".to_string(),
-                HeaderName::Host => "developer.mozilla.org".to_string(),
+                HeaderName::AcceptLanguage => "fr",
+                HeaderName::Host => "developer.mozilla.org",
             },
             version: "1.1",
             time: Local::now(),
@@ -517,6 +527,14 @@ mod tests {
         assert_eq!(parsed.path, expected.path);
         assert_eq!(parsed.version, expected.version);
         assert_eq!(parsed.headers, expected.headers);
+        Ok(())
+    }
+
+    #[test]
+    fn accept_encoding_parser() -> Result<()> {
+        let val = "compress;q=0.5, gzip";
+        let res = HttpParser::parse(Rule::accept_encoding, val);
+        println!("{res:#?}");
         Ok(())
     }
 }

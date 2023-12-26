@@ -1,3 +1,4 @@
+#![deny(unused)]
 use std::{env, path::PathBuf};
 
 use clap::Parser;
