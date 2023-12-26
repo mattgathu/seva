@@ -301,18 +301,38 @@ macro_rules! status_codes {
 
         impl StatusCode {
             pub fn as_u16(&self) -> u16 {
-
                 match *self {
                     $(
                         StatusCode::$name => $code,
                     )+
                 }
             }
+            fn as_string(&self) -> String {
+                match *self {
+                    $(
+                        StatusCode::$name => Self::split_name(stringify!($name)),
+                    )+
+                }
+            }
+
+            fn split_name(name:&str) -> String {
+                let mut parts = vec!();
+                let mut cur = String::new();
+                for ch in name.chars() {
+                    if ch.is_uppercase() && !cur.is_empty() {
+                        parts.push(cur.clone());
+                        cur.clear();
+                    }
+                    cur.push(ch);
+                }
+                parts.push(cur);
+                parts.join(" ").to_uppercase()
+            }
         }
 
         impl std::fmt::Display for StatusCode {
             fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-                write!(f, "{}", self.as_u16())
+                write!(f, "{}", self.as_string())
             }
         }
 
