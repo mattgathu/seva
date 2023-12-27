@@ -140,17 +140,18 @@ impl RequestHandler {
             }
             Err(e) => {
                 error!("failed to handle request. reason: {e}");
-                //TODO: try sending 500
                 match e {
                     SevaError::UriTooLong => {
-                        self.send_error(StatusCode::UriTooLong, None)?;
+                        self.send_error(StatusCode::UriTooLong, None)?
                     }
-                    _ => {
-                        self.send_error(
-                            StatusCode::InternalServerError,
-                            Some(&format!("Internal Server Error. Reason: {e}")),
-                        )?;
-                    }
+                    SevaError::MethodNotAllowed(_) => self.send_error(
+                        StatusCode::MethodNotAllowed,
+                        Some(&format!("{e}")),
+                    )?,
+                    _ => self.send_error(
+                        StatusCode::InternalServerError,
+                        Some(&format!("Internal Server Error. Reason: {e}")),
+                    )?,
                 }
                 return Err(e);
             }
@@ -164,14 +165,8 @@ impl RequestHandler {
         let req = Request::parse(&req_str)?;
 
         // check if method is allowed
-        if req.method == HttpMethod::Post
-            || req.method == HttpMethod::Patch
-            || req.method == HttpMethod::Delete
-            || req.method == HttpMethod::Options
-        {
-            let resp = ResponseBuilder::method_not_allowed().build();
-            self.send_response(resp, &req)?;
-            return Ok(());
+        if req.method != HttpMethod::Get && req.method != HttpMethod::Head {
+            return Err(SevaError::MethodNotAllowed(req.method));
         }
 
         let req_path = Self::parse_req_path(req.path)?;

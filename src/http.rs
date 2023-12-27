@@ -125,10 +125,6 @@ impl ResponseBuilder<Empty> {
         Self::new(StatusCode::NotFound, BTreeMap::new())
     }
 
-    pub fn method_not_allowed() -> ResponseBuilder<Empty> {
-        Self::new(StatusCode::MethodNotAllowed, BTreeMap::new())
-    }
-
     #[debug_ensures(ret.headers.len() == 1)]
     pub fn redirect(location: &str) -> ResponseBuilder<Empty> {
         let mut headers = BTreeMap::new();
