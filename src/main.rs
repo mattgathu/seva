@@ -77,7 +77,7 @@ fn main() -> errors::Result<()> {
         port = args.port,
     );
 
-    let mut server = server::HttpServer::new(args.host, args.port, dir)?;
+    let mut server = server::HttpServer::new(&args.host, args.port, dir, false)?;
     server.run()?;
     Ok(())
 }

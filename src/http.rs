@@ -106,7 +106,7 @@ pub struct ResponseBuilder<B> {
 }
 
 impl ResponseBuilder<Empty> {
-    fn new(
+    pub fn new(
         status: StatusCode,
         headers: BTreeMap<HeaderName, String>,
     ) -> ResponseBuilder<Empty> {
@@ -123,6 +123,10 @@ impl ResponseBuilder<Empty> {
 
     pub fn not_found() -> ResponseBuilder<Empty> {
         Self::new(StatusCode::NotFound, BTreeMap::new())
+    }
+
+    pub fn method_not_allowed() -> ResponseBuilder<Empty> {
+        Self::new(StatusCode::MethodNotAllowed, BTreeMap::new())
     }
 
     #[debug_ensures(ret.headers.len() == 1)]
@@ -526,8 +530,9 @@ header_names! {
 mod tests {
     use std::io::Cursor;
 
-    use super::*;
     use maplit::btreemap;
+
+    use super::*;
 
     #[test]
     fn request_parsing() -> Result<()> {

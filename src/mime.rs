@@ -6,7 +6,7 @@ macro_rules! mime_types {
         )+
     ) => {
 
-        #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+        #[derive(Debug, Clone, PartialEq, Eq)]
         pub enum MimeType {
             $(
                 $(#[$docs])*
@@ -164,6 +164,8 @@ mime_types! {
     (Tif,"image/tiff");
     ///Tagged Image File Format (TIFF)
     (Tiff,"image/tiff");
+    /// Toml text file
+    (Toml,"application/toml");
     ///MPEG transport stream
     (Ts,"video/mp2t");
     ///TrueType Font

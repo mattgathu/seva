@@ -21,6 +21,11 @@ pub enum SevaError {
     StringConversion(#[from] FromUtf8Error),
     #[error(transparent)]
     ShutdownError(#[from] ctrlc::Error),
+    #[allow(unused)]
+    #[error("Test client error: {0}")]
+    TestClient(String),
+    #[error("URI Too Long")]
+    UriTooLong,
 }
 
 #[derive(Error, Debug)]
@@ -41,12 +46,11 @@ impl fmt::Display for ParsingError {
 
 pub trait IoErrorUtils {
     fn kind(&self) -> io::ErrorKind;
-    fn is_interrupted(&self) -> bool {
-        self.kind() == io::ErrorKind::Interrupted
-    }
+
     fn is_blocking(&self) -> bool {
         self.kind() == io::ErrorKind::WouldBlock
     }
+
     fn is_not_found(&self) -> bool {
         self.kind() == io::ErrorKind::NotFound
     }
