@@ -39,6 +39,10 @@ struct Args {
     /// Interface to bind to.
     #[arg(long, default_value = "127.0.0.1")]
     host: String,
+
+    /// Log Level
+    #[arg(long, default_value = "INFO")]
+    log_level: Level,
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -57,7 +61,7 @@ fn home_dir() -> Option<PathBuf> {
 fn main() -> errors::Result<()> {
     let args = Args::parse();
     let subscriber = FmtSubscriber::builder()
-        .with_max_level(Level::TRACE)
+        .with_max_level(args.log_level)
         .compact()
         .with_file(false)
         .with_line_number(false)

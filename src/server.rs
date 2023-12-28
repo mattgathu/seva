@@ -133,6 +133,7 @@ impl RequestHandler {
             dir,
         }
     }
+
     fn handle(&mut self) -> Result<()> {
         match self._handle() {
             Ok(_) => {
@@ -350,6 +351,15 @@ impl RequestHandler {
         if let Some(msg) = msg {
             io::copy(&mut Cursor::new(msg.as_bytes()), &mut self.stream)?;
         }
+
+        info!(
+            "{client_addr} - - [{time}] \"{req_line}\" {status} {bytes}",
+            client_addr = self.client_addr,
+            time = Local::now().format("%d/%b/%Y:%H:%M:%S %z"),
+            req_line = "-",
+            status = status.as_u16(),
+            bytes = msg.map(|m| m.len()).unwrap_or(0)
+        );
 
         Ok(())
     }
