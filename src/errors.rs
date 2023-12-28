@@ -3,8 +3,6 @@ use std::{io, string::FromUtf8Error, time::SystemTimeError};
 
 use thiserror::Error;
 
-use crate::http::HttpMethod;
-
 pub type Result<T> = std::result::Result<T, SevaError>;
 
 #[derive(Error, Debug)]
@@ -28,8 +26,6 @@ pub enum SevaError {
     TestClient(String),
     #[error("URI Too Long")]
     UriTooLong,
-    #[error("Http Method not allowed: {0}")]
-    MethodNotAllowed(HttpMethod),
 }
 
 #[derive(Error, Debug)]
