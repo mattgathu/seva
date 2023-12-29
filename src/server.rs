@@ -16,7 +16,7 @@ use chrono::Local;
 use clap::crate_version;
 use contracts::debug_requires;
 use handlebars::Handlebars;
-use tracing::{debug, error, info, trace, warn};
+use tracing::{debug, error, info, trace};
 
 use crate::{
     errors::{IoErrorUtils, ParsingError, Result, SevaError},
@@ -261,34 +261,30 @@ impl RequestHandler {
             .map_err(|_| ParsingError::InvalidRangeHeader(val.to_string()))?;
 
         // we only serve the first range
-        if let Some(range) = ranges.into_iter().next() {
-            let mut file = File::open(&entry.name)?;
-            file.seek(io::SeekFrom::Start(range.start as u64))?;
-            let mut buf = vec![0u8; range.size];
-            file.read_exact(&mut buf)?;
-            let response = ResponseBuilder::partial()
-                .headers(self.get_file_headers(entry))
-                .header(HeaderName::ContentLength, &format!("{}", buf.len()))
-                .header(
-                    HeaderName::ContentRange,
-                    &format!(
-                        "bytes {}-{}/{}",
-                        range.start,
-                        range.start + range.size,
-                        entry.size
-                    ),
-                )
-                .header(HeaderName::Vary, "*")
-                .body(Cursor::new(buf))
-                .build();
-            self.send_response(response, request)?;
-        } else {
-            warn!("RequestHandler::send_partial unreachable block: empty ranges");
-            self.send_error(
-                StatusCode::RangeNotSatisifiable,
-                Some("invalid Range header"),
-            )?;
-        };
+        let range = ranges
+            .into_iter()
+            .next()
+            .ok_or_else(|| ParsingError::InvalidRangeHeader(val.to_string()))?;
+        let mut file = File::open(&entry.name)?;
+        file.seek(io::SeekFrom::Start(range.start as u64))?;
+        let mut buf = vec![0u8; range.size];
+        file.read_exact(&mut buf)?;
+        let response = ResponseBuilder::partial()
+            .headers(self.get_file_headers(entry))
+            .header(HeaderName::ContentLength, &format!("{}", buf.len()))
+            .header(
+                HeaderName::ContentRange,
+                &format!(
+                    "bytes {}-{}/{}",
+                    range.start,
+                    range.start + range.size,
+                    entry.size
+                ),
+            )
+            .header(HeaderName::Vary, "*")
+            .body(Cursor::new(buf))
+            .build();
+        self.send_response(response, request)?;
 
         Ok(())
     }
@@ -449,6 +445,7 @@ impl RequestHandler {
         self.send_hdr(HeaderName::Server, server)?;
         self.send_hdr(HeaderName::Date, Local::now().to_rfc2822())?;
         self.send_hdr(HeaderName::Connection, "close")?;
+        self.send_hdr(HeaderName::AcceptRanges, "bytes")?;
 
         // Finish
         self.stream.write_all(b"\r\n")?;
