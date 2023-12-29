@@ -714,6 +714,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn range_requests_ok() -> Result<()> {
         let port = start_server()?;
 
