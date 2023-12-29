@@ -1,6 +1,6 @@
 [package]
 name = "seva"
-version = "0.1.0"
+version = "0.1.1"
 edition = "2021"
 authors = ["Matt Gathu <mattgathu@gmail.com>"]
 description = "Simple directory http server inspired by Python's http.server"
