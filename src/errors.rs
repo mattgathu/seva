@@ -1,5 +1,5 @@
 use core::fmt;
-use std::{io, string::FromUtf8Error, time::SystemTimeError};
+use std::{io, num::ParseIntError, string::FromUtf8Error, time::SystemTimeError};
 
 use thiserror::Error;
 
@@ -36,6 +36,7 @@ pub enum ParsingError {
     UnknownMethod(String),
     PestRuleError(String),
     DateTime(String),
+    IntError(#[from] ParseIntError),
 }
 
 impl fmt::Display for ParsingError {

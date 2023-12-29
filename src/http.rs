@@ -23,6 +23,9 @@ pub struct Request<'a> {
 }
 
 impl<'a> Request<'a> {
+    pub fn is_partial(&self) -> bool {
+        self.headers.contains_key(&HeaderName::Range)
+    }
     pub fn parse(req_str: &str) -> Result<Request> {
         trace!("Request::parse");
         let mut res = HttpParser::parse(Rule::request, req_str)
@@ -119,6 +122,10 @@ impl ResponseBuilder<Empty> {
 
     pub fn ok() -> ResponseBuilder<Empty> {
         Self::new(StatusCode::Ok, BTreeMap::new())
+    }
+
+    pub fn partial() -> ResponseBuilder<Empty> {
+        Self::new(StatusCode::PartialContent, BTreeMap::new())
     }
 
     pub fn not_found() -> ResponseBuilder<Empty> {
@@ -273,15 +280,116 @@ header = { header_name ~ ":" ~ whitespace ~ header_value ~ NEWLINE }
 header_name = { (!(NEWLINE | ":") ~ ANY)+ }
 header_value = { (!NEWLINE ~ ANY)+ }
 
-
+// accept-encoding header parser
 ws = _{( " " | "\t")*}
 accept_encoding = { encoding ~ ws ~ ("," ~ ws ~ encoding)* ~ EOI}
 algo = {(ASCII_ALPHA+ | "identity" | "*")}
 weight = {ws ~ ";" ~ ws ~ "q=" ~ qvalue}
 qvalue = { ("0" ~ ("." ~ ASCII_DIGIT{,3}){,1}) | ("1" ~ ("." ~ "0"{,3}){,1}) }
 encoding = { algo ~ weight*}
+
+// Range header parser
+//
+// A range request can specify a single range or a set of ranges within a single representation.
+//
+// Range = ranges-specifier
+// ranges-specifier = range-unit "=" range-set
+// range-unit       = token
+// range-set        = 1#range-spec
+// range-spec       = int-range / suffix-range / other-range
+// int-range        = first-pos "-" [ last-pos ]
+// first-pos        = 1*DIGIT
+// last-pos         = 1*DIGIT
+// suffix-range     = "-" suffix-length
+// suffix-length    = 1*DIGIT
+// other-range      = 1*( %x21-2B / %x2D-7E ) ; 1*(VCHAR excluding comma)
+//
+bytes_range = { "bytes" ~ ws ~ "=" ~ ws ~ range_sets }
+range_sets = _{ range_set ~ ws ~ ("," ~ ws ~ range_set)* ~ EOI }
+range_set = _{(int_range | suffix_range)}
+int_range = { first_pos ~ "-" ~ last_pos*}
+suffix_range = { "-" ~ len}
+first_pos = { ASCII_DIGIT+ }
+last_pos = { ASCII_DIGIT+ }
+len = { ASCII_DIGIT* }
 "#]
-struct HttpParser;
+pub struct HttpParser;
+
+impl HttpParser {
+    pub fn parse_bytes_range(val: &str) -> Result<Vec<BytesRange>> {
+        let br = HttpParser::parse(Rule::bytes_range, val)
+            .map_err(|e| ParsingError::PestRuleError(format!("{e:?}")))?
+            .next()
+            .unwrap();
+        let mut ranges = vec![];
+        for pair in br.into_inner() {
+            match pair.as_rule() {
+                Rule::int_range => {
+                    let mut inner = pair.into_inner();
+                    let first_pos = inner
+                        .next()
+                        .unwrap()
+                        .as_str()
+                        .parse()
+                        .map_err(ParsingError::IntError)?;
+                    let last_pos = match inner.next() {
+                        Some(r) => Some(
+                            r.as_str().parse().map_err(ParsingError::IntError)?,
+                        ),
+                        None => None,
+                    };
+                    ranges.push(BytesRange::Int {
+                        first_pos,
+                        last_pos,
+                    });
+                }
+                Rule::suffix_range => {
+                    let mut inner = pair.into_inner();
+                    let len = inner
+                        .next()
+                        .unwrap()
+                        .as_str()
+                        .parse()
+                        .map_err(ParsingError::IntError)?;
+                    ranges.push(BytesRange::Suffix { len });
+                }
+                _ => {}
+            }
+        }
+
+        Ok(ranges)
+    }
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum BytesRange {
+    Int {
+        first_pos: usize,
+        last_pos: Option<usize>,
+    },
+    Suffix {
+        len: usize,
+    },
+}
+
+impl BytesRange {
+    pub fn is_valid(&self, max_len: usize) -> bool {
+        match *self {
+            BytesRange::Int {
+                first_pos,
+                last_pos,
+            } => {
+                let last_pos = last_pos.unwrap_or(max_len);
+                if first_pos > last_pos {
+                    false
+                } else {
+                    last_pos <= max_len
+                }
+            }
+            BytesRange::Suffix { len } => len > max_len,
+        }
+    }
+}
 
 macro_rules! status_codes {
     (
@@ -394,6 +502,9 @@ status_codes! {
     /// This response is sent on an idle connection
     (RequestTimeout,408);
 
+    /// Indicates that a server cannot serve the requested ranges.
+    (RangeNotSatisifiable, 416);
+
     /// The user has sent too many requests in a given amount of time ("rate
     /// limiting").
     (TooManyRequests,429);
@@ -488,11 +599,17 @@ header_names! {
     /// Indicates the size of the entity-body.
     (ContentLength, "content-length");
 
+    /// Indicates where in a full body message a partial message belongs.
+    (ContentRange, "content-range");
+
     /// Used to indicate the media type of the resource.
     (ContentType, "content-type");
 
     /// Contains the date and time at which the message was originated.
     (Date, "date");
+
+    /// Identifier for a specific version of a resource.
+    (ETag, "etag");
 
     /// Specifies the domain name of the server and (optionally) the TCP port
     /// number on which the server is listening.
@@ -513,6 +630,9 @@ header_names! {
     /// Indicates the part of a document that the server should return.
     (Range, "range");
 
+    /// Contains the absolute or partial address from which a resource has been requested.
+    (Referer, "referer");
+
     /// Contains information about the software used by the origin server to
     /// handle the request.
     (Server, "server");
@@ -520,6 +640,9 @@ header_names! {
     /// Contains a string that allows identifying the requesting client's
     /// software.
     (UserAgent, "user-agent");
+
+    /// Describes the parts of the request message aside from the method and URL that influenced the content of the response it occurs in.
+    (Vary, "vary");
 
     /// General HTTP header contains information about possible problems with
     /// the status of the message.
@@ -564,6 +687,25 @@ mod tests {
         let val = "compress;q=0.5, gzip";
         let res = HttpParser::parse(Rule::accept_encoding, val);
         assert!(res.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn bytes_range_parser() -> Result<()> {
+        for val in [
+            "bytes=0-499",
+            "bytes=500-999",
+            "bytes=-500",
+            "bytes=9500-",
+            "bytes=0-0,-1",
+            "bytes= 0-0, -2",
+            "bytes= 0-999, 4500-5499, -1000",
+            "bytes=500-600,601-999",
+            "bytes=500-700,601-999",
+        ] {
+            let range = HttpParser::parse_bytes_range(val);
+            assert!(range.is_ok(), "failed to parse: {val}");
+        }
         Ok(())
     }
 

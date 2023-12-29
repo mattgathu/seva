@@ -1,7 +1,7 @@
 use std::{
     collections::HashMap,
     fs::{metadata, read_dir, File},
-    io::{self, Cursor, Read, Write},
+    io::{self, Cursor, Read, Seek, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
     str::FromStr,
@@ -15,12 +15,15 @@ use bytes::{BufMut, BytesMut};
 use chrono::Local;
 use clap::crate_version;
 use handlebars::Handlebars;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     errors::{IoErrorUtils, Result, SevaError},
     fs::{DirEntry, EntryType},
-    http::{HeaderName, HttpMethod, Request, Response, ResponseBuilder, StatusCode},
+    http::{
+        HeaderName, HttpMethod, HttpParser, Request, Response, ResponseBuilder,
+        StatusCode,
+    },
     mime::MimeType,
 };
 
@@ -173,7 +176,13 @@ impl RequestHandler {
             self.send_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
             match entry.file_type {
-                EntryType::File => self.send_file(&req, &entry)?,
+                EntryType::File => {
+                    if req.is_partial() {
+                        self.send_partial(&req, &entry)?
+                    } else {
+                        self.send_file(&req, &entry)?
+                    }
+                }
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
                         trace!("RequestHandler::_handle send_dir");
@@ -231,6 +240,71 @@ impl RequestHandler {
             .build();
         self.send_response(resp, req)?;
 
+        Ok(())
+    }
+
+    fn send_partial(&mut self, request: &Request, entry: &DirEntry) -> Result<()> {
+        trace!("RequestHandler::send_partial");
+        if let Some(val) = request.headers.get(&HeaderName::Range) {
+            let ranges = HttpParser::parse_bytes_range(val)?;
+            // we only serve the first range
+            if let Some(range) = ranges.into_iter().next() {
+                if !range.is_valid(entry.size as usize) {
+                    return self.send_error(
+                        StatusCode::RangeNotSatisifiable,
+                        Some("invalid bytes range"),
+                    );
+                }
+                let (start, size) = match range {
+                    crate::http::BytesRange::Int {
+                        first_pos,
+                        last_pos,
+                    } => {
+                        if let Some(lpos) = last_pos {
+                            let delta = lpos - first_pos;
+                            (first_pos, delta)
+                        } else {
+                            let delta = entry.size as usize - first_pos;
+
+                            (first_pos, delta)
+                        }
+                    }
+                    crate::http::BytesRange::Suffix { len } => {
+                        let start = entry.size as usize - len;
+                        (start, len)
+                    }
+                };
+                let mut file = File::open(&entry.name)?;
+                file.seek(io::SeekFrom::Start(start as u64))?;
+                let mut buf = vec![0u8; size];
+                file.read_exact(&mut buf)?;
+                let response = ResponseBuilder::partial()
+                    .headers(self.get_file_headers(entry))
+                    .header(HeaderName::ContentLength, &format!("{}", buf.len()))
+                    .header(
+                        HeaderName::ContentRange,
+                        &format!("bytes {}-{}/{}", start, start + size, entry.size),
+                    )
+                    .header(HeaderName::Vary, "*")
+                    .body(Cursor::new(buf))
+                    .build();
+                self.send_response(response, request)?;
+            } else {
+                warn!(
+                    "RequestHandler::send_partial unreachable block: empty ranges"
+                );
+                self.send_error(
+                    StatusCode::RangeNotSatisifiable,
+                    Some("invalid Range header"),
+                )?;
+            };
+        } else {
+            error!("RequestHandler::send_partial unreachable block: missing range header value");
+            self.send_error(
+                StatusCode::InternalServerError,
+                Some("missing range header value"),
+            )?;
+        }
         Ok(())
     }
 
@@ -337,7 +411,11 @@ impl RequestHandler {
             0
         } else {
             trace!("RequestHandler::send_response body io::copy");
-            io::copy(&mut response.body, &mut self.stream)? as usize
+            // TODO: can we do this w/o blocking
+            self.stream.set_nonblocking(false)?;
+            let count = io::copy(&mut response.body, &mut self.stream)? as usize;
+            self.stream.set_nonblocking(true)?;
+            count
         };
 
         self.log_response(request, response.status, bytes_sent);
@@ -631,6 +709,36 @@ mod tests {
             .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
 
         assert!(response.status().is_success());
+
+        Ok(())
+    }
+
+    #[test]
+    fn range_requests_ok() -> Result<()> {
+        let port = start_server()?;
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/Cargo.toml"))
+            .header("Range", "bytes=0-24")
+            .send()
+            .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
+
+        assert!(response.status().is_success());
+        assert_eq!(
+            response.headers().get("content-length"),
+            Some(&HeaderValue::from_str("24").unwrap())
+        );
+        assert_eq!(
+            response.headers().get("content-type"),
+            Some(&HeaderValue::from_str("application/toml").unwrap())
+        );
+        assert_eq!(response.status().as_u16(), 206);
+        let expected_body = "[package]\nname = \"seva\"\n";
+        let resp_bytes = response
+            .text()
+            .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
+        assert_eq!(resp_bytes, expected_body);
 
         Ok(())
     }
