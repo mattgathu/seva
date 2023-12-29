@@ -339,8 +339,8 @@ impl HttpParser {
                         None => None,
                     };
                     ranges.push(BytesRange::Int {
-                        first_pos,
-                        last_pos,
+                        start: first_pos,
+                        end: last_pos,
                     });
                 }
                 Rule::suffix_range => {
@@ -363,27 +363,19 @@ impl HttpParser {
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BytesRange {
-    Int {
-        first_pos: usize,
-        last_pos: Option<usize>,
-    },
-    Suffix {
-        len: usize,
-    },
+    Int { start: usize, end: Option<usize> },
+    Suffix { len: usize },
 }
 
 impl BytesRange {
     pub fn is_valid(&self, max_len: usize) -> bool {
         match *self {
-            BytesRange::Int {
-                first_pos,
-                last_pos,
-            } => {
-                let last_pos = last_pos.unwrap_or(max_len);
-                if first_pos > last_pos {
+            BytesRange::Int { start, end } => {
+                let end = end.unwrap_or(max_len);
+                if start > end {
                     false
                 } else {
-                    last_pos <= max_len
+                    end <= max_len
                 }
             }
             BytesRange::Suffix { len } => len > max_len,

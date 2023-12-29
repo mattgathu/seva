@@ -256,18 +256,8 @@ impl RequestHandler {
                     );
                 }
                 let (start, size) = match range {
-                    crate::http::BytesRange::Int {
-                        first_pos,
-                        last_pos,
-                    } => {
-                        if let Some(lpos) = last_pos {
-                            let delta = lpos - first_pos;
-                            (first_pos, delta)
-                        } else {
-                            let delta = entry.size as usize - first_pos;
-
-                            (first_pos, delta)
-                        }
+                    crate::http::BytesRange::Int { start, end } => {
+                        (start, end.unwrap_or(entry.size as usize) - start)
                     }
                     crate::http::BytesRange::Suffix { len } => {
                         let start = entry.size as usize - len;
