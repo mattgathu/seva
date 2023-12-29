@@ -3,6 +3,8 @@ use std::{io, num::ParseIntError, string::FromUtf8Error, time::SystemTimeError};
 
 use thiserror::Error;
 
+use crate::http::HeaderName;
+
 pub type Result<T> = std::result::Result<T, SevaError>;
 
 #[derive(Error, Debug)]
@@ -26,6 +28,8 @@ pub enum SevaError {
     TestClient(String),
     #[error("URI Too Long")]
     UriTooLong,
+    #[error("Missing value for header: {0}")]
+    MissingHeaderValue(HeaderName),
 }
 
 #[derive(Error, Debug)]
@@ -37,6 +41,7 @@ pub enum ParsingError {
     PestRuleError(String),
     DateTime(String),
     IntError(#[from] ParseIntError),
+    InvalidRangeHeader(String),
 }
 
 impl fmt::Display for ParsingError {

@@ -316,7 +316,7 @@ len = { ASCII_DIGIT* }
 pub struct HttpParser;
 
 impl HttpParser {
-    pub fn parse_bytes_range(val: &str) -> Result<Vec<BytesRange>> {
+    pub fn parse_bytes_range(val: &str, max_len: usize) -> Result<Vec<BytesRange>> {
         let br = HttpParser::parse(Rule::bytes_range, val)
             .map_err(|e| ParsingError::PestRuleError(format!("{e:?}")))?
             .next()
@@ -326,35 +326,43 @@ impl HttpParser {
             match pair.as_rule() {
                 Rule::int_range => {
                     let mut inner = pair.into_inner();
-                    let first_pos = inner
+                    let start = inner
                         .next()
                         .unwrap()
                         .as_str()
                         .parse()
                         .map_err(ParsingError::IntError)?;
-                    let last_pos = match inner.next() {
-                        Some(r) => Some(
-                            r.as_str().parse().map_err(ParsingError::IntError)?,
-                        ),
-                        None => None,
+                    let end = match inner.next() {
+                        Some(r) => {
+                            r.as_str().parse().map_err(ParsingError::IntError)?
+                        }
+                        None => max_len,
                     };
-                    ranges.push(BytesRange::Int {
-                        start: first_pos,
-                        end: last_pos,
-                    });
+                    if start > end {
+                        Err(ParsingError::InvalidRangeHeader(val.to_owned()))?;
+                    }
+                    let size = end - start;
+                    ranges.push(BytesRange { start, size });
                 }
                 Rule::suffix_range => {
                     let mut inner = pair.into_inner();
-                    let len = inner
+                    let size = inner
                         .next()
                         .unwrap()
                         .as_str()
                         .parse()
                         .map_err(ParsingError::IntError)?;
-                    ranges.push(BytesRange::Suffix { len });
+                    if size >= max_len {
+                        Err(ParsingError::InvalidRangeHeader(val.to_owned()))?;
+                    }
+                    let start = max_len - size;
+                    ranges.push(BytesRange { start, size });
                 }
                 _ => {}
             }
+        }
+        if ranges.len() > 10 {
+            return Err(ParsingError::InvalidRangeHeader(val.to_owned()))?;
         }
 
         Ok(ranges)
@@ -362,25 +370,9 @@ impl HttpParser {
 }
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub enum BytesRange {
-    Int { start: usize, end: Option<usize> },
-    Suffix { len: usize },
-}
-
-impl BytesRange {
-    pub fn is_valid(&self, max_len: usize) -> bool {
-        match *self {
-            BytesRange::Int { start, end } => {
-                let end = end.unwrap_or(max_len);
-                if start > end {
-                    false
-                } else {
-                    end <= max_len
-                }
-            }
-            BytesRange::Suffix { len } => len > max_len,
-        }
-    }
+pub struct BytesRange {
+    pub start: usize,
+    pub size: usize,
 }
 
 macro_rules! status_codes {
@@ -695,8 +687,8 @@ mod tests {
             "bytes=500-600,601-999",
             "bytes=500-700,601-999",
         ] {
-            let range = HttpParser::parse_bytes_range(val);
-            assert!(range.is_ok(), "failed to parse: {val}");
+            let range = HttpParser::parse_bytes_range(val, 10000);
+            assert!(range.is_ok(), "failed to parse: {val}. Reason: {range:?}");
         }
         Ok(())
     }

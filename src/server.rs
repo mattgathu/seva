@@ -14,11 +14,12 @@ use std::{
 use bytes::{BufMut, BytesMut};
 use chrono::Local;
 use clap::crate_version;
+use contracts::debug_requires;
 use handlebars::Handlebars;
 use tracing::{debug, error, info, trace, warn};
 
 use crate::{
-    errors::{IoErrorUtils, Result, SevaError},
+    errors::{IoErrorUtils, ParsingError, Result, SevaError},
     fs::{DirEntry, EntryType},
     http::{
         HeaderName, HttpMethod, HttpParser, Request, Response, ResponseBuilder,
@@ -146,6 +147,12 @@ impl RequestHandler {
                 SevaError::UriTooLong => {
                     self.send_error(StatusCode::UriTooLong, None)?
                 }
+                SevaError::ParsingError(ParsingError::InvalidRangeHeader(hdr)) => {
+                    self.send_error(
+                        StatusCode::RangeNotSatisifiable,
+                        Some(&format!("invalid range: {hdr}")),
+                    )?
+                }
                 _ => {
                     error!("internal server error: {e}");
                     self.send_error(
@@ -243,58 +250,46 @@ impl RequestHandler {
         Ok(())
     }
 
+    #[debug_requires(request.headers.contains_key(&HeaderName::Range))]
     fn send_partial(&mut self, request: &Request, entry: &DirEntry) -> Result<()> {
         trace!("RequestHandler::send_partial");
-        if let Some(val) = request.headers.get(&HeaderName::Range) {
-            let ranges = HttpParser::parse_bytes_range(val)?;
-            // we only serve the first range
-            if let Some(range) = ranges.into_iter().next() {
-                if !range.is_valid(entry.size as usize) {
-                    return self.send_error(
-                        StatusCode::RangeNotSatisifiable,
-                        Some("invalid bytes range"),
-                    );
-                }
-                let (start, size) = match range {
-                    crate::http::BytesRange::Int { start, end } => {
-                        (start, end.unwrap_or(entry.size as usize) - start)
-                    }
-                    crate::http::BytesRange::Suffix { len } => {
-                        let start = entry.size as usize - len;
-                        (start, len)
-                    }
-                };
-                let mut file = File::open(&entry.name)?;
-                file.seek(io::SeekFrom::Start(start as u64))?;
-                let mut buf = vec![0u8; size];
-                file.read_exact(&mut buf)?;
-                let response = ResponseBuilder::partial()
-                    .headers(self.get_file_headers(entry))
-                    .header(HeaderName::ContentLength, &format!("{}", buf.len()))
-                    .header(
-                        HeaderName::ContentRange,
-                        &format!("bytes {}-{}/{}", start, start + size, entry.size),
-                    )
-                    .header(HeaderName::Vary, "*")
-                    .body(Cursor::new(buf))
-                    .build();
-                self.send_response(response, request)?;
-            } else {
-                warn!(
-                    "RequestHandler::send_partial unreachable block: empty ranges"
-                );
-                self.send_error(
-                    StatusCode::RangeNotSatisifiable,
-                    Some("invalid Range header"),
-                )?;
-            };
+        let val = request
+            .headers
+            .get(&HeaderName::Range)
+            .ok_or_else(|| SevaError::MissingHeaderValue(HeaderName::Range))?;
+        let ranges = HttpParser::parse_bytes_range(val, entry.size as usize)
+            .map_err(|_| ParsingError::InvalidRangeHeader(val.to_string()))?;
+
+        // we only serve the first range
+        if let Some(range) = ranges.into_iter().next() {
+            let mut file = File::open(&entry.name)?;
+            file.seek(io::SeekFrom::Start(range.start as u64))?;
+            let mut buf = vec![0u8; range.size];
+            file.read_exact(&mut buf)?;
+            let response = ResponseBuilder::partial()
+                .headers(self.get_file_headers(entry))
+                .header(HeaderName::ContentLength, &format!("{}", buf.len()))
+                .header(
+                    HeaderName::ContentRange,
+                    &format!(
+                        "bytes {}-{}/{}",
+                        range.start,
+                        range.start + range.size,
+                        entry.size
+                    ),
+                )
+                .header(HeaderName::Vary, "*")
+                .body(Cursor::new(buf))
+                .build();
+            self.send_response(response, request)?;
         } else {
-            error!("RequestHandler::send_partial unreachable block: missing range header value");
+            warn!("RequestHandler::send_partial unreachable block: empty ranges");
             self.send_error(
-                StatusCode::InternalServerError,
-                Some("missing range header value"),
+                StatusCode::RangeNotSatisifiable,
+                Some("invalid Range header"),
             )?;
-        }
+        };
+
         Ok(())
     }
 
@@ -730,6 +725,40 @@ mod tests {
             .text()
             .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
         assert_eq!(resp_bytes, expected_body);
+
+        Ok(())
+    }
+
+    #[test]
+    fn invalid_range_unit() -> Result<()> {
+        let port = start_server()?;
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/Cargo.toml"))
+            .header("Range", "bits=0-500")
+            .send()
+            .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
+
+        assert!(response.status().is_client_error());
+        assert_eq!(response.status().as_u16(), 416);
+
+        Ok(())
+    }
+
+    #[test]
+    fn empty_bytes_range() -> Result<()> {
+        let port = start_server()?;
+
+        let client = reqwest::blocking::Client::new();
+        let response = client
+            .get(format!("http://127.0.0.1:{port}/Cargo.toml"))
+            .header("Range", "bytes= ")
+            .send()
+            .map_err(|e| SevaError::TestClient(format!("{}", e)))?;
+
+        assert!(response.status().is_client_error());
+        assert_eq!(response.status().as_u16(), 416);
 
         Ok(())
     }
