@@ -9,6 +9,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         Arc,
     },
+    time::{Duration, Instant},
 };
 
 use bytes::{BufMut, BytesMut};
@@ -16,7 +17,7 @@ use chrono::Local;
 use clap::crate_version;
 use contracts::debug_requires;
 use handlebars::Handlebars;
-use tracing::{debug, error, info, trace};
+use tracing::{debug, error, info, trace, warn};
 
 use crate::{
     errors::{IoErrorUtils, ParsingError, Result, SevaError},
@@ -56,6 +57,7 @@ pub struct HttpServer {
     listener: TcpListener,
     shutdown: Arc<AtomicBool>,
     test_mode: bool,
+    timeout: Duration,
 }
 
 impl HttpServer {
@@ -64,10 +66,12 @@ impl HttpServer {
         port: u16,
         dir: PathBuf,
         test_mode: bool,
+        timeout: u64,
     ) -> Result<HttpServer> {
         debug!("binding to {host} on port: {port}");
         let listener = TcpListener::bind((host, port))?;
         listener.set_nonblocking(true)?;
+
         let shutdown = Arc::new(AtomicBool::new(false));
         let s = shutdown.clone();
         if !test_mode {
@@ -78,6 +82,7 @@ impl HttpServer {
             listener,
             shutdown,
             test_mode,
+            timeout: Duration::from_secs(timeout),
         })
     }
     fn shut_down(&mut self) -> Result<()> {
@@ -86,22 +91,23 @@ impl HttpServer {
     }
 
     pub fn run(&mut self) -> Result<()> {
-        let start = std::time::Instant::now();
+        let start = Instant::now();
         loop {
             match self.listener.accept() {
                 Ok((stream, client_addr)) => {
+                    stream.set_read_timeout(Some(self.timeout))?;
+                    stream.set_write_timeout(Some(self.timeout))?;
                     let dir = self.dir.clone();
-                    let mut handler = RequestHandler::new(stream, client_addr, dir);
+                    let mut handler =
+                        RequestHandler::new(stream, client_addr, dir, self.timeout);
                     match handler.handle() {
                         Ok(_) => {}
-                        // TODO: return 500
                         Err(e) => {
                             error!("got error while handling request: {e}")
                         }
                     }
                 }
                 Err(e) => {
-                    // handle error
                     if !e.is_blocking() {
                         error!("failed to accept new tcp connection. Reason: {e}");
                     }
@@ -111,8 +117,7 @@ impl HttpServer {
                 self.shut_down()?;
                 break;
             }
-            if self.test_mode && start.elapsed() > std::time::Duration::from_secs(1)
-            {
+            if self.test_mode && start.elapsed() > Duration::from_secs(1) {
                 break;
             }
         }
@@ -124,17 +129,20 @@ struct RequestHandler {
     stream: TcpStream,
     client_addr: SocketAddr,
     dir: PathBuf,
+    timeout: Duration,
 }
 impl RequestHandler {
     fn new(
         stream: TcpStream,
         client_addr: SocketAddr,
         dir: PathBuf,
+        timeout: Duration,
     ) -> RequestHandler {
         Self {
             stream,
             client_addr,
             dir,
+            timeout,
         }
     }
 
@@ -152,6 +160,12 @@ impl RequestHandler {
                         StatusCode::RangeNotSatisifiable,
                         Some(&format!("invalid range: {hdr}")),
                     )?
+                }
+                SevaError::ReadTimeOut => {
+                    warn!("timed out while reading request data")
+                }
+                SevaError::WriteTimeOut => {
+                    warn!("timed out while writing request data")
                 }
                 _ => {
                     error!("internal server error: {e}");
@@ -353,16 +367,21 @@ impl RequestHandler {
     //TODO: optimize
     fn read_line(&mut self, buf: &mut BytesMut, limit: usize) -> Result<()> {
         let mut sz = 0usize;
+        let t = Instant::now();
         loop {
             if sz == limit {
                 break;
             } else {
                 let mut b = [0u8; 1];
-                //TODO: possible to get stuck infinitely
-                // fix by adding timeout
                 loop {
                     match self.stream.read_exact(&mut b) {
                         Ok(_) => break,
+                        Err(e) if e.is_blocking() && t.elapsed() > self.timeout => {
+                            return Err(SevaError::ReadTimeOut)
+                        }
+                        Err(e) if e.is_timed_out() => {
+                            return Err(SevaError::ReadTimeOut)
+                        }
                         Err(e) if e.is_blocking() => continue,
                         Err(e) => return Err(SevaError::Io(e)),
                     }
@@ -388,13 +407,22 @@ impl RequestHandler {
         self.send_headers(response.headers)?;
         self.end_headers()?;
 
+        let t = Instant::now();
+
         let bytes_sent = if request.method == HttpMethod::Head {
             0
         } else {
             trace!("RequestHandler::send_response body io::copy");
             // TODO: can we do this w/o blocking
             self.stream.set_nonblocking(false)?;
-            let count = io::copy(&mut response.body, &mut self.stream)? as usize;
+            let count =
+                io::copy(&mut response.body, &mut self.stream).map_err(|e| {
+                    if e.is_timed_out() || t.elapsed() > self.timeout {
+                        SevaError::WriteTimeOut
+                    } else {
+                        SevaError::Io(e)
+                    }
+                })? as usize;
             self.stream.set_nonblocking(true)?;
             count
         };
@@ -580,10 +608,20 @@ mod tests {
             .collect()
     }
 
+    fn create_server() -> Result<(HttpServer, u16)> {
+        loop {
+            let path = current_dir()?;
+            let port = get_random_port();
+            match HttpServer::new("127.0.0.1", port, path, true, 30) {
+                Ok(svr) => return Ok((svr, port)),
+                Err(SevaError::Io(e)) if e.is_addr_in_use() => continue,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
     fn start_server() -> Result<u16> {
-        let path = current_dir()?;
-        let port = get_random_port();
-        let mut server = HttpServer::new("127.0.0.1", port, path, true)?;
+        let (mut server, port) = create_server()?;
         thread::spawn(move || server.run());
         let subscriber = FmtSubscriber::builder()
             .with_max_level(Level::INFO)
@@ -600,7 +638,7 @@ mod tests {
     fn shutdown_works() -> Result<()> {
         let path = current_dir()?;
         let port = get_random_port();
-        let mut server = HttpServer::new("127.0.0.1", port, path, false)?;
+        let mut server = HttpServer::new("127.0.0.1", port, path, false, 30)?;
         let shutdown = server.shutdown.clone();
         let handle = thread::spawn(move || server.run());
         shutdown.store(true, Ordering::SeqCst);
