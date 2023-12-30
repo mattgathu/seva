@@ -407,8 +407,6 @@ impl RequestHandler {
         self.send_headers(response.headers)?;
         self.end_headers()?;
 
-        let t = Instant::now();
-
         let bytes_sent = if request.method == HttpMethod::Head {
             0
         } else {
@@ -417,7 +415,7 @@ impl RequestHandler {
             self.stream.set_nonblocking(false)?;
             let count =
                 io::copy(&mut response.body, &mut self.stream).map_err(|e| {
-                    if e.is_timed_out() || t.elapsed() > self.timeout {
+                    if e.is_timed_out() {
                         SevaError::WriteTimeOut
                     } else {
                         SevaError::Io(e)
