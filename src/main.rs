@@ -43,6 +43,10 @@ struct Args {
     /// Log Level
     #[arg(long, default_value = "INFO")]
     log_level: Level,
+
+    /// Timeout duration in seconds
+    #[arg(long, default_value = "60")]
+    timeout: u64,
 }
 
 fn expand_tilde(path: &str) -> String {
@@ -81,7 +85,8 @@ fn main() -> errors::Result<()> {
         port = args.port,
     );
 
-    let mut server = server::HttpServer::new(&args.host, args.port, dir, false)?;
+    let mut server =
+        server::HttpServer::new(&args.host, args.port, dir, false, args.timeout)?;
     server.run()?;
     Ok(())
 }

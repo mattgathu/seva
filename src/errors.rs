@@ -30,6 +30,10 @@ pub enum SevaError {
     UriTooLong,
     #[error("Missing value for header: {0}")]
     MissingHeaderValue(HeaderName),
+    #[error("timed out while reading data")]
+    ReadTimeOut,
+    #[error("timed out while writing data")]
+    WriteTimeOut,
 }
 
 #[derive(Error, Debug)]
@@ -53,8 +57,16 @@ impl fmt::Display for ParsingError {
 pub trait IoErrorUtils {
     fn kind(&self) -> io::ErrorKind;
 
+    fn is_addr_in_use(&self) -> bool {
+        self.kind() == io::ErrorKind::AddrInUse
+    }
+
     fn is_blocking(&self) -> bool {
         self.kind() == io::ErrorKind::WouldBlock
+    }
+
+    fn is_timed_out(&self) -> bool {
+        self.kind() == io::ErrorKind::TimedOut
     }
 
     fn is_not_found(&self) -> bool {
