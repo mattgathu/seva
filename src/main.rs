@@ -18,6 +18,7 @@ mod fs;
 mod http;
 mod mime;
 mod server;
+mod utils;
 
 /// A simple directory http server.
 ///
@@ -45,7 +46,7 @@ struct Args {
     log_level: Level,
 
     /// Timeout duration in seconds
-    #[arg(long, default_value = "60")]
+    #[arg(long, default_value = "10")]
     timeout: u64,
 }
 
