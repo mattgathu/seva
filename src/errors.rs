@@ -15,8 +15,6 @@ pub enum SevaError {
     ParsingError(#[from] ParsingError),
     #[error(transparent)]
     TimeError(#[from] SystemTimeError),
-    #[error("errors that can never happen")]
-    Infallible,
     #[error(transparent)]
     RenderError(#[from] handlebars::RenderError),
     #[error(transparent)]

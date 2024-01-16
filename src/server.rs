@@ -4,7 +4,6 @@ use std::{
     io::{self, Cursor, Read, Seek, Write},
     net::{SocketAddr, TcpListener, TcpStream},
     path::PathBuf,
-    str::FromStr,
     sync::{
         atomic::{AtomicBool, Ordering},
         Arc,
@@ -27,6 +26,7 @@ use crate::{
         StatusCode,
     },
     mime::MimeType,
+    utils::t,
 };
 
 const MAX_URI_LEN: usize = 64000;
@@ -70,12 +70,15 @@ impl HttpServer {
     ) -> Result<HttpServer> {
         debug!("binding to {host} on port: {port}");
         let listener = TcpListener::bind((host, port))?;
-        listener.set_nonblocking(true)?;
+        t!("listener: set non-blocking", listener.set_nonblocking(true))?;
 
         let shutdown = Arc::new(AtomicBool::new(false));
         let s = shutdown.clone();
         if !test_mode {
-            ctrlc::set_handler(move || s.store(true, Ordering::SeqCst))?;
+            t!(
+                "ctrlc::set_handler",
+                ctrlc::set_handler(move || s.store(true, Ordering::SeqCst))
+            )?;
         }
         Ok(Self {
             dir,
@@ -95,8 +98,14 @@ impl HttpServer {
         loop {
             match self.listener.accept() {
                 Ok((stream, client_addr)) => {
-                    stream.set_read_timeout(Some(self.timeout))?;
-                    stream.set_write_timeout(Some(self.timeout))?;
+                    t!(
+                        "set read timeout",
+                        stream.set_read_timeout(Some(self.timeout))
+                    )?;
+                    t!(
+                        "set write timeout",
+                        stream.set_write_timeout(Some(self.timeout))
+                    )?;
                     let dir = self.dir.clone();
                     let mut handler =
                         RequestHandler::new(stream, client_addr, dir, self.timeout);
@@ -147,7 +156,7 @@ impl RequestHandler {
     }
 
     fn handle(&mut self) -> Result<()> {
-        match self._handle() {
+        match t!("RequestHandler::handle", self._handle()) {
             Ok(_) => {
                 trace!("RequestHandler::handle OK");
             }
@@ -182,8 +191,8 @@ impl RequestHandler {
 
     fn _handle(&mut self) -> Result<()> {
         debug!("handling stream");
-        let req_str = self.read_request()?;
-        let req = Request::parse(&req_str)?;
+        let req_str = t!("RequestHandler::read_request", self.read_request())?;
+        let req = t!("Request::parse", Request::parse(&req_str))?;
 
         // check if method is allowed
         if req.method != HttpMethod::Get && req.method != HttpMethod::Head {
@@ -196,7 +205,7 @@ impl RequestHandler {
         if req_path == "/" || req_path == "/index.html" || req_path.is_empty() {
             self.send_dir(&req, "/", &self.dir.clone())?;
         } else if let Some(entry) = self.lookup_path(&req_path)? {
-            match entry.file_type {
+            match entry.kind {
                 EntryType::File => {
                     if req.is_partial() {
                         self.send_partial(&req, &entry)?
@@ -207,12 +216,7 @@ impl RequestHandler {
                 EntryType::Dir => {
                     if req_path.ends_with('/') {
                         trace!("RequestHandler::_handle send_dir");
-                        self.send_dir(
-                            &req,
-                            &req_path,
-                            &PathBuf::from_str(&entry.name)
-                                .map_err(|_| SevaError::Infallible)?,
-                        )?
+                        self.send_dir(&req, &req_path, &entry.path)?
                     } else {
                         trace!("RequestHandler::_handle redirect");
                         self.redirect(&req, &format!("/{}/", req_path))?
@@ -255,9 +259,10 @@ impl RequestHandler {
     }
 
     fn send_file(&mut self, req: &Request, entry: &DirEntry) -> Result<()> {
+        trace!("RequestHandler::send_file req=[{req:?}] entry=[{entry:?}]");
         let resp = ResponseBuilder::ok()
             .headers(self.get_file_headers(entry))
-            .body(File::open(&entry.name)?)
+            .body(t!("send_file File::open", File::open(&entry.path))?)
             .build();
         self.send_response(resp, req)?;
 
@@ -327,9 +332,12 @@ impl RequestHandler {
     fn lookup_path(&mut self, path: &str) -> Result<Option<DirEntry>> {
         debug!("path lookup: {path}");
         let fpath = self.dir.join(path);
-        debug!("path lookup fpath: {fpath:?}");
-        match metadata(fpath) {
-            Ok(meta) => Ok(Some(DirEntry::from_metadata(meta, path)?)),
+        debug!("path lookup full path: {fpath:?}");
+        match metadata(&fpath) {
+            Ok(meta) => {
+                let de = DirEntry::from_metadata(meta, path, fpath)?;
+                Ok(Some(de))
+            }
             Err(e) => {
                 if e.is_not_found() {
                     Ok(None)
@@ -517,7 +525,7 @@ impl RequestHandler {
             let item = entry?;
             let meta = item.metadata()?;
             let name = format!("{}", item.file_name().to_string_lossy());
-            let entry = DirEntry::from_metadata(meta, &name)?;
+            let entry = DirEntry::from_metadata(meta, &name, item.path())?;
             entries.push(entry);
         }
         Ok(entries)
